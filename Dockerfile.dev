@@ -1,0 +1,11 @@
+# Development image for IncidentDNA. Provides exactly the Go toolchain used
+# to build, test, lint, and format this repository — nothing else. Pinned to
+# the same version verified in docs/phase-1-report.md.
+FROM golang:1.26.5
+
+WORKDIR /workspace
+
+# gofmt and go vet ship with the base toolchain image, so no additional
+# packages are installed here (see docs/architecture.md, "Rejected
+# alternatives" — golangci-lint was deliberately not added).
+CMD ["sleep", "infinity"]
