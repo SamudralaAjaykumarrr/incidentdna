@@ -14,7 +14,7 @@ GOLDEN="$ROOT/testdata/golden/duplicate-payment.fingerprint"
 
 if [ ! -x "$BIN" ]; then
   echo "verify-golden-fingerprint: building $BIN" >&2
-  ( cd "$ROOT" && go build -o "$BIN" ./cmd/incidentdna )
+  ( cd "$ROOT" && go build -buildvcs=false -o "$BIN" ./cmd/incidentdna )
 fi
 
 ACTUAL="$("$BIN" fingerprint "$EXAMPLE")"

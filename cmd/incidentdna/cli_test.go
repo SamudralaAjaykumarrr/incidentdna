@@ -19,7 +19,7 @@ func buildBinary(t *testing.T) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cmd := exec.Command("go", "build", "-o", bin, ".")
+	cmd := exec.Command("go", "build", "-buildvcs=false", "-o", bin, ".")
 	cmd.Dir = wd
 	out, err := cmd.CombinedOutput()
 	if err != nil {

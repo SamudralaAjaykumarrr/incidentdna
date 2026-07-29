@@ -21,7 +21,7 @@ test:
 	$(RUN) go test ./... -race -count=1
 
 build:
-	$(RUN) go build -o bin/incidentdna ./cmd/incidentdna
+	$(RUN) go build -buildvcs=false -o bin/incidentdna ./cmd/incidentdna
 
 example: build
 	$(RUN) sh -c '\
