@@ -1,0 +1,48 @@
+schema_version: "0.1"
+incident:
+  id: INC-TEST-0001
+  title: Test incident
+  summary: A test incident.
+  occurred_at: "2026-01-01T00:00:00Z"
+application:
+  name: example-app
+  service: example-service
+  environment: production
+  release_version: "1.0.0"
+trigger:
+  type: message-redelivery
+  description: A message was redelivered after ack timeout.
+events:
+  - id: evt-1
+    type: event-consumed
+    description: Event consumed.
+  - id: evt-2
+    type: charge-committed
+    description: Charge committed.
+    caused_by: [evt-1]
+services:
+  - name: payment-worker
+    role: consumer
+    technology_category: message-queue-consumer
+side_effects:
+  - type: duplicate_charge
+    description: Second charge attempted.
+    affected_entity: order
+    reversible: true
+business_invariants:
+  - id: inv-1
+    statement: At most one completed charge per order.
+expected_corrected_behavior:
+  - Idempotent charge processing keyed on order id.
+evidence:
+  - id: ev-1
+    type: log
+    location: s3://bucket/key
+    digest: "0000000000000000000000000000000000000000000000000000000000000000"
+reproduction_sequence:
+  - step: 1
+    description: Consume order-created event.
+    ref_event_id: evt-1
+privacy:
+  sensitivity: internal
+  redacted: false
