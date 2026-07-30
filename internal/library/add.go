@@ -1,13 +1,19 @@
-// add.go implements Phase 3 Slice 2: the §5 occurrence-decision logic for
+// add.go implements Phase 3 Slice 2's §5 occurrence-decision logic for
 // adding a validated IDIR document to a library Store — new occurrence,
 // idempotent re-add, conflict, or corrupted-existing-entry — per
 // docs/phase-3-plan.md §5/§12/§13.
 //
-// Add enforces the §10 privacy gate (see privacy.go, added in Slice 4)
-// immediately after validation and before any fingerprint/digest/storage
-// work. Add does not enforce any of the §11 resource limits; those are a
-// later slice (docs/phase-3-plan.md §18, slice 5) layered on top of this
-// one.
+// Add enforces the §10 privacy gate (see privacy.go, Slice 4) immediately
+// after validation and before any fingerprint/digest/storage work, and the
+// §11 resource limits (see limits.go, Slice 5) before any unsafe or
+// unnecessary write: MaxLibraryEntries before creating a fingerprint
+// directory that does not yet exist, and MaxOccurrencesPerFingerprint
+// before storing a genuinely new occurrence under an existing one.
+// MaxDocumentSize is not enforced here — Add accepts an already-parsed
+// *idir.Document, not a file, and that limit belongs at the file-loading
+// boundary (idir.LoadFile), which the future CLI (Slice 6) will call
+// unchanged (docs/phase-3-plan.md §11; see limits.go's checkDocumentSize
+// doc comment).
 package library
 
 import (
@@ -25,68 +31,6 @@ import (
 	"github.com/SamudralaAjaykumarrr/incidentdna/internal/idir"
 	"github.com/SamudralaAjaykumarrr/incidentdna/internal/validate"
 )
-
-// Sentinel errors identifying the distinct Add outcomes/failures required by
-// docs/phase-3-plan.md §5/§12. Add distinguishes its failure modes via these
-// wrapped sentinels and errors.Is, following store.go's existing plain-error
-// style (Slice 1) rather than introducing a structured *Error/ErrorKind type
-// here — docs/phase-3-plan.md §18 assigns that fuller type (errors.go) to
-// Slice 5, alongside the resource-limit constants this file deliberately
-// does not enforce yet.
-var (
-	// ErrInvalidDocument means doc failed validate.Validate.
-	ErrInvalidDocument = errors.New("library: document failed validation")
-
-	// ErrConflict means an occurrence with the same incident.id already
-	// exists under this fingerprint with materially different content
-	// (docs/phase-3-plan.md §5 case 3).
-	ErrConflict = errors.New("library: an occurrence with this incident id already exists under this fingerprint with different content")
-
-	// ErrCorruptedOccurrence means an existing occurrence that Add needed to
-	// consult (because its index entry shares the incoming document's
-	// incident.id) is missing, unreadable, or does not re-hash to its own
-	// declared digest (docs/phase-3-plan.md §5 case 4). Add never reuses,
-	// repairs, or overwrites such an entry.
-	ErrCorruptedOccurrence = errors.New("library: an existing stored occurrence is corrupted")
-
-	// ErrMalformedIndex means a fingerprint directory's index.json exists
-	// but is not well-formed index data.
-	ErrMalformedIndex = errors.New("library: index is malformed")
-)
-
-// AddOutcome categorizes a successful Add call.
-type AddOutcome string
-
-const (
-	// AddOutcomeStored means a new occurrence was written: either no
-	// existing occurrence under this fingerprint shared the document's
-	// incident.id, or one did but at an orphaned, unindexed, byte-identical
-	// digest path recovered from a prior incomplete write.
-	AddOutcomeStored AddOutcome = "stored"
-
-	// AddOutcomeIdempotent means an occurrence with the same incident.id and
-	// the same canonical-bytes digest already existed; nothing was written.
-	AddOutcomeIdempotent AddOutcome = "idempotent"
-)
-
-// AddResult is the outcome of a successful Add call.
-type AddResult struct {
-	Outcome AddOutcome
-	// Fingerprint is the "sha256:"-prefixed failure-class fingerprint
-	// (internal/fingerprint.Compute's output) doc was stored or matched
-	// under.
-	Fingerprint string
-	// Digest is the bare (unprefixed) 64-character lowercase hex SHA-256
-	// digest of the occurrence's own canonical document bytes.
-	Digest string
-	// PrivacyOverridden is true when doc's privacy.redacted field was false
-	// (or unset) and Add proceeded only because AddOptions.AllowUnredacted
-	// was set (docs/phase-3-plan.md §10). When true, the caller (the future
-	// CLI) MUST display a warning to the user; internal/library itself never
-	// prints one. Always false when doc already declared privacy.redacted
-	// == true, regardless of AllowUnredacted.
-	PrivacyOverridden bool
-}
 
 // Add validates doc, enforces the §10 privacy gate, computes doc's
 // fingerprint and canonical-bytes digest, and applies the occurrence-decision
@@ -113,6 +57,12 @@ type AddResult struct {
 // concatenated into, a filesystem path — only fingerprint and digest values
 // validated by Store's parseFingerprint/parseDigestHex ever become path
 // components (docs/phase-3-plan.md §5).
+//
+// MaxLibraryEntries and MaxOccurrencesPerFingerprint are enforced further
+// below, immediately before Add would otherwise create a new fingerprint
+// directory or store a genuinely new occurrence — never for an idempotent
+// re-add, and never after any unsafe or unnecessary write
+// (docs/phase-3-plan.md §12).
 func Add(ctx context.Context, s *Store, doc *idir.Document, opts AddOptions) (AddResult, error) {
 	if err := ctx.Err(); err != nil {
 		return AddResult{}, fmt.Errorf("library: add canceled: %w", err)
@@ -142,6 +92,18 @@ func Add(ctx context.Context, s *Store, doc *idir.Document, opts AddOptions) (Ad
 	sum := sha256.Sum256(canonicalBytes)
 	digestHex := hex.EncodeToString(sum[:])
 
+	fpDir, err := s.FingerprintDir(fp)
+	if err != nil {
+		return AddResult{}, fmt.Errorf("library: resolve fingerprint directory: %w", err)
+	}
+	fpDirExisted := true
+	if _, statErr := os.Stat(fpDir); statErr != nil {
+		if !errors.Is(statErr, fs.ErrNotExist) {
+			return AddResult{}, fmt.Errorf("library: stat fingerprint directory %q: %w", fpDir, statErr)
+		}
+		fpDirExisted = false
+	}
+
 	idxPath, err := s.IndexPath(fp)
 	if err != nil {
 		return AddResult{}, fmt.Errorf("library: resolve index path: %w", err)
@@ -169,6 +131,19 @@ func Add(ctx context.Context, s *Store, doc *idir.Document, opts AddOptions) (Ad
 			return AddResult{Outcome: AddOutcomeIdempotent, Fingerprint: fp, Digest: digestHex, PrivacyOverridden: overridden}, nil
 		}
 		return AddResult{}, fmt.Errorf("library: %w (incident id %q, fingerprint %s)", ErrConflict, doc.Incident.ID, fp)
+	}
+
+	// From here, Add is about to store a genuinely new occurrence — the
+	// only path that can grow either the library's fingerprint count or a
+	// fingerprint group's occurrence count, so both resource-limit checks
+	// run here, before any write.
+	if !fpDirExisted {
+		if err := checkLibraryEntryCap(s); err != nil {
+			return AddResult{}, err
+		}
+	}
+	if err := checkOccurrenceCap(len(idx.Entries)); err != nil {
+		return AddResult{}, err
 	}
 
 	occPath, err := s.OccurrencePath(fp, digestHex)

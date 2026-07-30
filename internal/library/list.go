@@ -3,6 +3,13 @@
 // bounded to exactly the metadata fields docs/phase-3-plan.md §7/§20.7
 // approve for display — never the full stored document, business
 // invariants, event timelines, evidence contents, or remediation text.
+//
+// List enforces MaxListResults (see limits.go, Slice 5) once its structural
+// walk has discovered every fingerprint entry, but before doing any of the
+// per-entry work (opening and verifying occurrence files) that
+// summarizeFingerprint performs — so a library over the limit fails fast
+// rather than paying for unnecessary work it will refuse to return
+// (docs/phase-3-plan.md §12).
 package library
 
 import (
@@ -17,48 +24,6 @@ import (
 
 	"github.com/SamudralaAjaykumarrr/incidentdna/internal/idir"
 )
-
-// ErrMalformedLibrary means the library root's on-disk layout itself (a
-// shard or fingerprint directory's name, or its file type) does not match
-// the fixed content-addressed shape docs/phase-3-plan.md §5 defines. It is
-// distinct from ErrMalformedIndex, which is specifically about one
-// fingerprint directory's index.json content — this sentinel covers the
-// directory structure List must walk to discover fingerprints in the first
-// place, including the unsafe-symlink and non-hex-name (path-escape-shaped)
-// cases.
-var ErrMalformedLibrary = errors.New("library: library layout is malformed")
-
-// OccurrenceSummary is one occurrence's approved display metadata
-// (docs/phase-3-plan.md §7/§20.7) — never the full stored document,
-// business invariants, event timeline, evidence contents, or remediation
-// text.
-type OccurrenceSummary struct {
-	IncidentID string
-	Title      string
-	// Service is application.service, falling back to application.name if
-	// service is empty (docs/phase-3-plan.md §7: "Application/service
-	// (application.service, possibly application.name)").
-	Service    string
-	OccurredAt string
-}
-
-// FingerprintSummary is one fingerprint (failure class) group's approved
-// summary: the fingerprint itself, how many occurrences are stored under it,
-// and each occurrence's bounded display metadata, in deterministic
-// (occurrence-digest-ascending) order.
-type FingerprintSummary struct {
-	Fingerprint     string
-	OccurrenceCount int
-	Occurrences     []OccurrenceSummary
-}
-
-// ListResult is the outcome of a successful List call: every fingerprint
-// group currently in the library, ordered deterministically by fingerprint
-// hex string ascending (docs/phase-3-plan.md §13), regardless of filesystem
-// enumeration order.
-type ListResult struct {
-	Fingerprints []FingerprintSummary
-}
 
 // List enumerates every fingerprint group and occurrence currently stored in
 // s, returning only the bounded metadata fields docs/phase-3-plan.md §7
@@ -88,7 +53,7 @@ func List(ctx context.Context, s *Store) (ListResult, error) {
 		return ListResult{}, fmt.Errorf("library: read library root %q: %w", s.root, err)
 	}
 
-	var summaries []FingerprintSummary
+	var fps []string
 	for _, shardEntry := range shardEntries {
 		if err := ctx.Err(); err != nil {
 			return ListResult{}, fmt.Errorf("library: list canceled: %w", err)
@@ -109,12 +74,7 @@ func List(ctx context.Context, s *Store) (ListResult, error) {
 				return ListResult{}, fmt.Errorf("library: %w: fingerprint directory %q under shard %q: %v", ErrMalformedLibrary, fpEntry.Name(), shardEntry.Name(), err)
 			}
 
-			fp := "sha256:" + shardEntry.Name() + fpEntry.Name()
-			summary, err := summarizeFingerprint(s, fp)
-			if err != nil {
-				return ListResult{}, err
-			}
-			summaries = append(summaries, summary)
+			fps = append(fps, "sha256:"+shardEntry.Name()+fpEntry.Name())
 		}
 	}
 
@@ -124,9 +84,23 @@ func List(ctx context.Context, s *Store) (ListResult, error) {
 	// fingerprint-hex-ascending order — but sort defensively so ListResult's
 	// contract does not depend on that documented-but-easy-to-miss stdlib
 	// detail (docs/phase-3-plan.md §13).
-	sort.Slice(summaries, func(i, j int) bool {
-		return summaries[i].Fingerprint < summaries[j].Fingerprint
-	})
+	sort.Strings(fps)
+
+	if err := checkListResultsCap(len(fps)); err != nil {
+		return ListResult{}, err
+	}
+
+	summaries := make([]FingerprintSummary, 0, len(fps))
+	for _, fp := range fps {
+		if err := ctx.Err(); err != nil {
+			return ListResult{}, fmt.Errorf("library: list canceled: %w", err)
+		}
+		summary, err := summarizeFingerprint(s, fp)
+		if err != nil {
+			return ListResult{}, err
+		}
+		summaries = append(summaries, summary)
+	}
 
 	return ListResult{Fingerprints: summaries}, nil
 }

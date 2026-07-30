@@ -16,17 +16,8 @@
 package library
 
 import (
-	"errors"
-
 	"github.com/SamudralaAjaykumarrr/incidentdna/internal/idir"
 )
-
-// ErrPrivacyNotRedacted means doc's privacy.redacted field is false (or
-// unset) and AddOptions.AllowUnredacted was not set (docs/phase-3-plan.md
-// §10/§12). The error carries no document content beyond the fact of the
-// missing declaration — never the document's title, summary, or any other
-// field.
-var ErrPrivacyNotRedacted = errors.New("library: document is not declared redacted (privacy.redacted != true); pass --allow-unredacted to store it anyway")
 
 // AddOptions configures Add's optional, non-default behavior. The zero
 // value is the safe default: AllowUnredacted false means Add refuses any

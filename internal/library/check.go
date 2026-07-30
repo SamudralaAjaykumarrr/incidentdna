@@ -1,6 +1,12 @@
 // check.go implements Phase 3 Slice 3's read-side Check operation: does the
 // library already hold one or more trustworthy occurrences under a
 // candidate document's fingerprint? docs/phase-3-plan.md §3/§5/§7/§12.
+//
+// Check does not enforce MaxDocumentSize — it accepts an already-parsed
+// *idir.Document, not a file, and that limit belongs at the file-loading
+// boundary (idir.LoadFile), which the future CLI (Slice 6) will call
+// unchanged (docs/phase-3-plan.md §11; see limits.go's checkDocumentSize
+// doc comment).
 package library
 
 import (
@@ -11,34 +17,6 @@ import (
 	"github.com/SamudralaAjaykumarrr/incidentdna/internal/idir"
 	"github.com/SamudralaAjaykumarrr/incidentdna/internal/validate"
 )
-
-// CheckOutcome categorizes a successful Check call.
-type CheckOutcome string
-
-const (
-	// CheckOutcomeMatch means the library holds one or more intact
-	// occurrences under doc's fingerprint. Matching never requires any
-	// stored occurrence's incident.id to equal doc's own (docs/phase-3-plan.md
-	// §5: the fingerprint identifies a failure class, not a specific
-	// record).
-	CheckOutcomeMatch CheckOutcome = "match"
-
-	// CheckOutcomeNoMatch means doc is a valid document but the library
-	// holds no occurrence under its fingerprint.
-	CheckOutcomeNoMatch CheckOutcome = "no_match"
-)
-
-// CheckResult is the outcome of a successful Check call.
-type CheckResult struct {
-	Outcome CheckOutcome
-	// Fingerprint is doc's own "sha256:"-prefixed failure-class fingerprint
-	// (internal/fingerprint.Compute's output), populated regardless of
-	// Outcome.
-	Fingerprint string
-	// MatchCount is the number of intact occurrences found under
-	// Fingerprint. Zero when Outcome is CheckOutcomeNoMatch.
-	MatchCount int
-}
 
 // Check validates doc, computes its fingerprint (byte-for-byte the same
 // internal/fingerprint.Compute call every other command uses — no separate
