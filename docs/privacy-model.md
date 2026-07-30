@@ -61,14 +61,34 @@ Anyone building a real compliance/redaction pipeline on top of IncidentDNA
 later should treat this check as a low-cost tripwire for obviously-missed
 redactions, not as the mechanism that makes a document safe to share.
 
-## What Phase 1 does not do
+## Evidence storage (Phase 2)
+
+Phase 2 adds a local content-addressable store for the raw evidence files
+`evidence[].digest` references (see [`evidence-storage.md`](evidence-storage.md)).
+That store has no privacy controls of its own:
+
+- **Stored evidence bytes are not encrypted at rest.** They are written and
+  read as plain files; anyone with filesystem read access to the store root
+  can read them directly.
+- **Stored evidence bytes are not scanned for PII.** The redaction and
+  backstop-regex checks described above run only over specific fields of the
+  IDIR *document* (`trigger`/`events`/`side_effects` description-style
+  fields and the known sensitive locations) — they never inspect the
+  content of a file passed to `evidence store`, or any object already in the
+  store. Choosing what to put into an evidence file, and whether it needs
+  redaction before storing, is entirely the author's responsibility, with no
+  mechanical backstop at the storage layer.
+- **No data retention or deletion policy for stored evidence** — consistent
+  with the document-level statement below, extended to the store.
+
+## What Phase 1 and Phase 2 do not do
 
 - No automatic redaction — nothing in this codebase removes or masks
   sensitive content; validation only checks that an author's manual
   redaction was complete against the known-location list.
-- No PII detection across the whole document, only the specific fields
-  listed above.
-- No encryption at rest or in transit — Phase 1 has no storage or transport
-  layer at all.
-- No data retention or deletion policy — out of scope until there is a
-  place incidents are actually stored.
+- No PII detection across the whole document, or across stored evidence
+  file content — only the specific document fields listed above.
+- No encryption at rest or in transit — for either IDIR documents or stored
+  evidence bytes.
+- No data retention or deletion policy — for either IDIR documents or the
+  evidence store.

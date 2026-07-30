@@ -30,6 +30,14 @@ and its storage locations, and privacy/redaction metadata. None of these
 change what class of failure is being described — they identify the record,
 not the pattern.
 
+This exclusion is unchanged by Phase 2's evidence store
+(`internal/evidence`, see [`evidence-storage.md`](evidence-storage.md)): no
+field the evidence store introduces or reads (a `--store` directory, an
+object's on-disk path, presence/absence, or verification status) is part of
+`idir.Document` at all, so none of it can reach the identity payload. A
+document's fingerprint is identical regardless of which store its evidence
+is checked against, or whether it verifies successfully.
+
 ## Causal structure, not causal free text
 
 Each event contributes only its `type` and the `type`s of the events listed

@@ -62,6 +62,20 @@ What Phase 1 implements:
 - **A containerized development workflow** (Docker + Makefile) and CI, so
   the toolchain is identical for every contributor and for CI itself.
 
+## Phase 2: evidence storage and digest verification
+
+Phase 2 adds a local, content-addressable evidence store and four
+`incidentdna evidence` subcommands (`store`, `verify`, `list`, `inspect`) so
+an `evidence[].digest` declared in an IDIR document can be checked against
+real stored bytes, not just format-validated. See
+[`docs/evidence-storage.md`](docs/evidence-storage.md) for the full design —
+store layout, resource limits, path-traversal/symlink protections, and what
+is explicitly *not* covered (no encryption at rest, no signing/authenticity
+proof, no remote storage). A separate, fully fictional example,
+[`examples/evidence-storage-demo/`](examples/evidence-storage-demo/), exists
+to demonstrate the four commands end-to-end without touching
+`examples/duplicate-payment/` or its golden fingerprint.
+
 ## CLI commands
 
 ```
@@ -82,10 +96,30 @@ incidentdna inspect <file>
 incidentdna compare <file-a> <file-b>
     Report whether two IDIR documents share the same normalized incident
     fingerprint, and explain material differences if they do not.
+
+incidentdna evidence store [--store <dir>] <evidence-file>
+    Compute the SHA-256 digest of <evidence-file> and copy its bytes into a
+    local content-addressed evidence store. Never modifies any incident
+    document.
+
+incidentdna evidence verify [--store <dir>] <incident-file>
+    Validate <incident-file> and check every evidence[].digest against the
+    store: presence and full content-integrity re-hash.
+
+incidentdna evidence list [--store <dir>] <incident-file>
+    Show each evidence[] entry and whether an object is present in the
+    store (presence only — not an integrity guarantee; use verify for that).
+
+incidentdna evidence inspect [--store <dir>] <digest>
+    Report metadata (presence, size, integrity) about one stored object,
+    addressed directly by digest. Never prints its content.
 ```
 
 Exit codes are meaningful and relied on by CI: `0` success, `1`
-I/O/parse/usage error, `2` semantic validation failure.
+I/O/parse/usage error, `2` semantic validation failure (or, for `evidence
+verify`/`evidence inspect`, a MISSING/CORRUPTED finding). See
+[`docs/evidence-storage.md`](docs/evidence-storage.md) for the full
+`evidence` command reference.
 
 `incidentdna` performs no network access and collects no telemetry —
 every subcommand is pure local file I/O.
@@ -143,8 +177,10 @@ internal/validate/     Semantic rule engine (cycles, dangling refs, digest forma
 internal/canonical/    Deterministic ("canonical") JSON re-encoder
 internal/fingerprint/  Identity-payload extraction -> canonical -> sha256
 internal/compare/      Fingerprint comparison + per-dimension diff
+internal/evidence/     Local content-addressed evidence store + digest verification
 schemas/idir/v0.1/     Documentation-grade JSON Schema for the format
-examples/duplicate-payment/  Synthetic example used by tests and `make example`
+examples/duplicate-payment/     Synthetic example used by tests and `make example`
+examples/evidence-storage-demo/ Separate synthetic example for `incidentdna evidence`
 testdata/golden/       Golden fingerprint + one fixture per rejected validation case
 ```
 
@@ -205,6 +241,11 @@ exact field-by-field inclusion table and the reasoning behind it.
 - **Evidence locations are never dereferenced.** `evidence[].location` is
   free-text metadata; the CLI never opens, fetches, or otherwise interprets
   it.
+- **Evidence digest verification is integrity-only, not authenticity.**
+  `incidentdna evidence verify`/`inspect` prove that stored bytes hash to
+  their declared digest — not that the evidence is truthful, or who stored
+  it. Stored evidence is not encrypted at rest. See
+  [`docs/evidence-storage.md`](docs/evidence-storage.md).
 - **Documents decode into a fixed typed struct**, never
   `interface{}`/`map[string]interface{}`, closing off a class of YAML-parser
   abuse.
@@ -229,12 +270,12 @@ are in [`docs/threat-model.md`](docs/threat-model.md) and
 
 ```
 cmd/incidentdna/    CLI entrypoint and subcommands
-internal/           idir, validate, canonical, fingerprint, compare packages
+internal/           idir, validate, canonical, fingerprint, compare, evidence packages
 schemas/idir/v0.1/  Documentation-grade JSON Schema for IDIR v0.1
 examples/           Synthetic example incident(s)
 testdata/golden/    Golden fingerprint and validation-rejection fixtures
 scripts/            Golden-fingerprint verification script
-docs/               Architecture, IDIR spec, fingerprint design, threat model, privacy model, product scope
+docs/               Architecture, IDIR spec, fingerprint design, evidence storage, threat model, privacy model, product scope
 Dockerfile.dev, compose.yaml, Makefile   Containerized dev/build/test workflow
 ```
 
@@ -242,33 +283,40 @@ Dockerfile.dev, compose.yaml, Makefile   Containerized dev/build/test workflow
 
 Phase 1 is complete for its own stated scope: representing, validating,
 fingerprinting, and comparing IDIR documents through a CLI, with no
-dependency on any storage, transport, or UI layer. Within that scope, it
-carries the limitations documented in
-[`docs/threat-model.md`](docs/threat-model.md) and
-[`docs/privacy-model.md`](docs/privacy-model.md) by design, notably:
+dependency on any storage, transport, or UI layer. Phase 2 adds a local
+evidence store and digest verification on top of that foundation, without
+changing it. Within that combined scope, the following limitations are by
+design — see [`docs/threat-model.md`](docs/threat-model.md),
+[`docs/privacy-model.md`](docs/privacy-model.md), and
+[`docs/evidence-storage.md`](docs/evidence-storage.md):
 
 - **No semantic tamper detection.** Validation checks internal coherence
   (no dangling refs, no cycles, required fields present), not whether a
   document truthfully represents what actually happened.
-- **Evidence digests are format-checked only.** There is no evidence
-  storage or retrieval yet, so a `sha256:` digest's format is validated but
-  never verified against actual bytes.
+- **Evidence digest verification is integrity-only, not authenticity.**
+  `evidence verify`/`evidence inspect` prove stored bytes hash to their
+  declared digest; they cannot prove the evidence is truthful, or who stored
+  it, or when. There is no signing or provenance chain.
 - **Redaction and sensitivity classification are self-declared and
   mechanically checked against a fixed field list**, not automatically
   detected or enforced across the whole document.
 - **No multi-tenant or access-control model.** Every invocation operates on
   files the invoking user already has filesystem access to.
+- **No encryption at rest for stored evidence, no remote/cloud storage, no
+  garbage collection, and fixed (non-configurable) resource limits** on
+  evidence size/count per command. See
+  [`docs/evidence-storage.md`](docs/evidence-storage.md) for the full list.
 
 This codebase contains no React/web framework, no Kubernetes or cloud
 infrastructure, no Kafka or event-ingestion integration, no OpenTelemetry or
 observability-pipeline integration, no AI/LLM calls, no SaaS
 authentication/billing, and no real fault injection against a running
-system. It does not perform evidence storage, release blocking, or
-telemetry ingestion, and it is not integrated with any other repository.
+system. It does not perform release blocking or telemetry ingestion, and it
+is not integrated with any other repository.
 
 ## Roadmap
 
-**Implemented (Phase 1, this repository):**
+**Implemented (Phase 1):**
 
 - IDIR v0.1 format, Go types, and size-capped loader
 - Semantic validation engine
@@ -278,11 +326,23 @@ telemetry ingestion, and it is not integrated with any other repository.
 - Duplicate-payment synthetic example
 - Containerized dev workflow and CI
 
+**Implemented (Phase 2, this repository):**
+
+- A local, content-addressable evidence store
+  (`.incidentdna/evidence/objects` by default)
+- `incidentdna evidence store` / `verify` / `list` / `inspect`
+- Path-traversal and symlink protections, atomic deduplicating writes, and
+  fixed resource limits (50 MiB/object, 100 entries/command, 500 MiB
+  aggregate verify bytes)
+- A separate, fully fictional `examples/evidence-storage-demo/` example
+- See [`docs/evidence-storage.md`](docs/evidence-storage.md) for the full
+  design and its explicit limitations.
+
 **Future work (not started, not scoped, not implemented in this codebase):**
 a shared incident library with storage and retrieval, ingestion from
 observability/event systems, integration into release gating, evidence
-integrity verification against stored artifacts, and any of the other items
-listed as explicitly out of scope in
+signing/authenticity proof, remote/cloud evidence storage, and any of the
+other items listed as explicitly out of scope in
 [`docs/product-scope.md`](docs/product-scope.md). None of this exists yet;
 treat any description of it as forward-looking, not current capability.
 
