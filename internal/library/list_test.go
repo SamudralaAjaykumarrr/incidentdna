@@ -36,15 +36,15 @@ func TestList_DeterministicOrderingAndApprovedFields(t *testing.T) {
 	classB.Incident.Title = "A different incident title"
 	classB.Incident.OccurredAt = "2026-02-02T00:00:00Z"
 
-	resA1, err := Add(context.Background(), s, classA1)
+	resA1, err := Add(context.Background(), s, classA1, AddOptions{})
 	if err != nil {
 		t.Fatalf("Add(A1): %v", err)
 	}
-	resA2, err := Add(context.Background(), s, classA2)
+	resA2, err := Add(context.Background(), s, classA2, AddOptions{})
 	if err != nil {
 		t.Fatalf("Add(A2): %v", err)
 	}
-	resB, err := Add(context.Background(), s, classB)
+	resB, err := Add(context.Background(), s, classB, AddOptions{})
 	if err != nil {
 		t.Fatalf("Add(B): %v", err)
 	}
@@ -120,7 +120,7 @@ func TestList_DeterministicOrderingAndApprovedFields(t *testing.T) {
 func TestList_MalformedIndexIsDetected(t *testing.T) {
 	s, _ := openStoreT(t)
 	doc := validDoc("INC-1")
-	res, err := Add(context.Background(), s, doc)
+	res, err := Add(context.Background(), s, doc, AddOptions{})
 	if err != nil {
 		t.Fatalf("Add: %v", err)
 	}
@@ -145,7 +145,7 @@ func TestList_MalformedIndexIsDetected(t *testing.T) {
 func TestList_MissingIndexedOccurrenceIsDetected(t *testing.T) {
 	s, _ := openStoreT(t)
 	doc := validDoc("INC-1")
-	res, err := Add(context.Background(), s, doc)
+	res, err := Add(context.Background(), s, doc, AddOptions{})
 	if err != nil {
 		t.Fatalf("Add: %v", err)
 	}
@@ -170,7 +170,7 @@ func TestList_MissingIndexedOccurrenceIsDetected(t *testing.T) {
 func TestList_CorruptedOccurrenceContentIsDetected(t *testing.T) {
 	s, _ := openStoreT(t)
 	doc := validDoc("INC-1")
-	res, err := Add(context.Background(), s, doc)
+	res, err := Add(context.Background(), s, doc, AddOptions{})
 	if err != nil {
 		t.Fatalf("Add: %v", err)
 	}
@@ -198,7 +198,7 @@ func TestList_CorruptedOccurrenceContentIsDetected(t *testing.T) {
 func TestList_RejectsSymlinkedFingerprintDirectory(t *testing.T) {
 	s, _ := openStoreT(t)
 	doc := validDoc("INC-1")
-	if _, err := Add(context.Background(), s, doc); err != nil {
+	if _, err := Add(context.Background(), s, doc, AddOptions{}); err != nil {
 		t.Fatalf("Add: %v", err)
 	}
 
@@ -274,7 +274,7 @@ func TestList_NoRawDocumentContentExposed(t *testing.T) {
 	doc := validDoc("INC-1")
 	doc.BusinessInvariants[0].Statement = "very-distinctive-invariant-statement-marker"
 	doc.Trigger.Description = "very-distinctive-trigger-description-marker"
-	if _, err := Add(context.Background(), s, doc); err != nil {
+	if _, err := Add(context.Background(), s, doc, AddOptions{}); err != nil {
 		t.Fatalf("Add: %v", err)
 	}
 

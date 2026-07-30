@@ -13,8 +13,10 @@ import (
 )
 
 // validDoc returns a minimal, semantically valid IDIR document (passes
-// validate.Validate) with the given incident id. Tests mutate a copy's
-// fields to explore the §5 occurrence-decision cases.
+// validate.Validate) with the given incident id, declared redacted so it
+// passes the §10 privacy gate by default. Tests mutate a copy's fields to
+// explore the §5 occurrence-decision cases; privacy_test.go constructs its
+// own unredacted documents explicitly to exercise the privacy gate itself.
 func validDoc(incidentID string) *idir.Document {
 	return &idir.Document{
 		SchemaVersion: idir.SupportedSchemaVersion,
@@ -43,7 +45,7 @@ func validDoc(incidentID string) *idir.Document {
 		ExpectedCorrectedBehavior: []string{"The system should behave correctly."},
 		Privacy: idir.Privacy{
 			Sensitivity: idir.SensitivityInternal,
-			Redacted:    false,
+			Redacted:    true,
 		},
 	}
 }
@@ -52,7 +54,7 @@ func TestAdd_FirstOccurrenceStoredSuccessfully(t *testing.T) {
 	s, _ := openStoreT(t)
 	doc := validDoc("INC-1")
 
-	res, err := Add(context.Background(), s, doc)
+	res, err := Add(context.Background(), s, doc, AddOptions{})
 	if err != nil {
 		t.Fatalf("Add: %v", err)
 	}
@@ -111,10 +113,10 @@ expected_corrected_behavior:
   - The system should behave correctly.
 privacy:
   sensitivity: internal
-  redacted: false
+  redacted: true
 `
 	jsonContent := `{
-  "privacy": { "redacted": false, "sensitivity": "internal" },
+  "privacy": { "redacted": true, "sensitivity": "internal" },
   "expected_corrected_behavior": ["The system should behave correctly."],
   "business_invariants": [ { "statement": "An example invariant for the formatting test.", "id": "inv-1" } ],
   "events": [ { "description": "An example event for the formatting test.", "type": "example-event", "id": "evt-1" } ],
@@ -142,7 +144,7 @@ privacy:
 		t.Fatalf("LoadFile(json): %v", err)
 	}
 
-	res1, err := Add(context.Background(), s, docA)
+	res1, err := Add(context.Background(), s, docA, AddOptions{})
 	if err != nil {
 		t.Fatalf("Add(yaml): %v", err)
 	}
@@ -150,7 +152,7 @@ privacy:
 		t.Fatalf("first Add outcome = %q, want %q", res1.Outcome, AddOutcomeStored)
 	}
 
-	res2, err := Add(context.Background(), s, docB)
+	res2, err := Add(context.Background(), s, docB, AddOptions{})
 	if err != nil {
 		t.Fatalf("Add(json): %v", err)
 	}
@@ -179,11 +181,11 @@ func TestAdd_DifferentIncidentIDSameFingerprintCreatesAnotherOccurrence(t *testi
 	docA := validDoc("INC-A")
 	docB := validDoc("INC-B") // identical fingerprint-relevant fields, different incident.id
 
-	resA, err := Add(context.Background(), s, docA)
+	resA, err := Add(context.Background(), s, docA, AddOptions{})
 	if err != nil {
 		t.Fatalf("Add(A): %v", err)
 	}
-	resB, err := Add(context.Background(), s, docB)
+	resB, err := Add(context.Background(), s, docB, AddOptions{})
 	if err != nil {
 		t.Fatalf("Add(B): %v", err)
 	}
@@ -217,12 +219,12 @@ func TestAdd_SameIncidentIDDifferentContentReturnsConflict(t *testing.T) {
 	doc2 := validDoc("INC-1")
 	doc2.Incident.Summary = "A materially different summary describing a different narrative."
 
-	res1, err := Add(context.Background(), s, doc1)
+	res1, err := Add(context.Background(), s, doc1, AddOptions{})
 	if err != nil {
 		t.Fatalf("Add(doc1): %v", err)
 	}
 
-	_, err = Add(context.Background(), s, doc2)
+	_, err = Add(context.Background(), s, doc2, AddOptions{})
 	if err == nil {
 		t.Fatal("Add(doc2): expected conflict error, got nil")
 	}
@@ -261,7 +263,7 @@ func TestAdd_RejectsDocumentFailingValidation(t *testing.T) {
 	s, _ := openStoreT(t)
 	doc := validDoc("") // empty incident.id fails validate.Validate
 
-	_, err := Add(context.Background(), s, doc)
+	_, err := Add(context.Background(), s, doc, AddOptions{})
 	if err == nil {
 		t.Fatal("Add: expected validation error, got nil")
 	}
@@ -278,7 +280,7 @@ func TestAdd_RejectsDocumentFailingValidation(t *testing.T) {
 func TestAdd_MalformedIndexIsDetected(t *testing.T) {
 	s, _ := openStoreT(t)
 	doc := validDoc("INC-1")
-	res, err := Add(context.Background(), s, doc)
+	res, err := Add(context.Background(), s, doc, AddOptions{})
 	if err != nil {
 		t.Fatalf("Add: %v", err)
 	}
@@ -292,7 +294,7 @@ func TestAdd_MalformedIndexIsDetected(t *testing.T) {
 	}
 
 	doc2 := validDoc("INC-2") // same fingerprint-relevant fields, different id
-	_, err = Add(context.Background(), s, doc2)
+	_, err = Add(context.Background(), s, doc2, AddOptions{})
 	if err == nil {
 		t.Fatal("Add against a malformed index: expected error, got nil")
 	}
@@ -304,7 +306,7 @@ func TestAdd_MalformedIndexIsDetected(t *testing.T) {
 func TestAdd_MissingOccurrenceReferencedByIndexIsCorrupted(t *testing.T) {
 	s, _ := openStoreT(t)
 	doc := validDoc("INC-1")
-	res, err := Add(context.Background(), s, doc)
+	res, err := Add(context.Background(), s, doc, AddOptions{})
 	if err != nil {
 		t.Fatalf("Add: %v", err)
 	}
@@ -319,7 +321,7 @@ func TestAdd_MissingOccurrenceReferencedByIndexIsCorrupted(t *testing.T) {
 
 	// Re-adding the same incident id forces Add to consult (and find missing)
 	// the occurrence the index references.
-	_, err = Add(context.Background(), s, doc)
+	_, err = Add(context.Background(), s, doc, AddOptions{})
 	if err == nil {
 		t.Fatal("Add with a missing referenced occurrence: expected error, got nil")
 	}
@@ -331,7 +333,7 @@ func TestAdd_MissingOccurrenceReferencedByIndexIsCorrupted(t *testing.T) {
 func TestAdd_CorruptedOccurrenceContentIsDetected(t *testing.T) {
 	s, _ := openStoreT(t)
 	doc := validDoc("INC-1")
-	res, err := Add(context.Background(), s, doc)
+	res, err := Add(context.Background(), s, doc, AddOptions{})
 	if err != nil {
 		t.Fatalf("Add: %v", err)
 	}
@@ -349,7 +351,7 @@ func TestAdd_CorruptedOccurrenceContentIsDetected(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err = Add(context.Background(), s, doc)
+	_, err = Add(context.Background(), s, doc, AddOptions{})
 	if err == nil {
 		t.Fatal("Add against a corrupted occurrence: expected error, got nil")
 	}
@@ -363,7 +365,7 @@ func TestAdd_DeterministicIndexOrdering(t *testing.T) {
 	ids := []string{"INC-Z", "INC-A", "INC-M"}
 	var fp string
 	for _, id := range ids {
-		res, err := Add(context.Background(), s, validDoc(id))
+		res, err := Add(context.Background(), s, validDoc(id), AddOptions{})
 		if err != nil {
 			t.Fatalf("Add(%s): %v", id, err)
 		}
@@ -414,7 +416,7 @@ func TestAdd_NeverUsesIncidentIDAsPathComponent(t *testing.T) {
 	suspicious := "../../../etc/passwd-INC-1"
 	doc := validDoc(suspicious)
 
-	res, err := Add(context.Background(), s, doc)
+	res, err := Add(context.Background(), s, doc, AddOptions{})
 	if err != nil {
 		t.Fatalf("Add: %v", err)
 	}

@@ -31,7 +31,7 @@ func TestCheck_FindsOneMatchingOccurrence(t *testing.T) {
 	s, _ := openStoreT(t)
 	doc := validDoc("INC-1")
 
-	addRes, err := Add(context.Background(), s, doc)
+	addRes, err := Add(context.Background(), s, doc, AddOptions{})
 	if err != nil {
 		t.Fatalf("Add: %v", err)
 	}
@@ -56,10 +56,10 @@ func TestCheck_FindsMultipleSameFingerprintOccurrences(t *testing.T) {
 	docA := validDoc("INC-A")
 	docB := validDoc("INC-B") // identical fingerprint-relevant fields, different incident.id
 
-	if _, err := Add(context.Background(), s, docA); err != nil {
+	if _, err := Add(context.Background(), s, docA, AddOptions{}); err != nil {
 		t.Fatalf("Add(A): %v", err)
 	}
-	if _, err := Add(context.Background(), s, docB); err != nil {
+	if _, err := Add(context.Background(), s, docB, AddOptions{}); err != nil {
 		t.Fatalf("Add(B): %v", err)
 	}
 
@@ -82,7 +82,7 @@ func TestCheck_FindsMultipleSameFingerprintOccurrences(t *testing.T) {
 func TestCheck_DoesNotRequireMatchingIncidentID(t *testing.T) {
 	s, _ := openStoreT(t)
 	stored := validDoc("INC-STORED")
-	if _, err := Add(context.Background(), s, stored); err != nil {
+	if _, err := Add(context.Background(), s, stored, AddOptions{}); err != nil {
 		t.Fatalf("Add: %v", err)
 	}
 
@@ -99,7 +99,7 @@ func TestCheck_DoesNotRequireMatchingIncidentID(t *testing.T) {
 func TestCheck_ReportsNoMatchForUnrelatedFingerprint(t *testing.T) {
 	s, _ := openStoreT(t)
 	stored := validDoc("INC-STORED")
-	if _, err := Add(context.Background(), s, stored); err != nil {
+	if _, err := Add(context.Background(), s, stored, AddOptions{}); err != nil {
 		t.Fatalf("Add: %v", err)
 	}
 
@@ -136,7 +136,7 @@ func TestCheck_RejectsDocumentFailingValidation(t *testing.T) {
 func TestCheck_MalformedIndexIsDetected(t *testing.T) {
 	s, _ := openStoreT(t)
 	doc := validDoc("INC-1")
-	res, err := Add(context.Background(), s, doc)
+	res, err := Add(context.Background(), s, doc, AddOptions{})
 	if err != nil {
 		t.Fatalf("Add: %v", err)
 	}
@@ -161,7 +161,7 @@ func TestCheck_MalformedIndexIsDetected(t *testing.T) {
 func TestCheck_MissingOccurrenceReferencedByIndexIsCorrupted(t *testing.T) {
 	s, _ := openStoreT(t)
 	doc := validDoc("INC-1")
-	res, err := Add(context.Background(), s, doc)
+	res, err := Add(context.Background(), s, doc, AddOptions{})
 	if err != nil {
 		t.Fatalf("Add: %v", err)
 	}
@@ -186,7 +186,7 @@ func TestCheck_MissingOccurrenceReferencedByIndexIsCorrupted(t *testing.T) {
 func TestCheck_CorruptedOccurrenceContentIsDetected(t *testing.T) {
 	s, _ := openStoreT(t)
 	doc := validDoc("INC-1")
-	res, err := Add(context.Background(), s, doc)
+	res, err := Add(context.Background(), s, doc, AddOptions{})
 	if err != nil {
 		t.Fatalf("Add: %v", err)
 	}
@@ -217,7 +217,7 @@ func TestCheck_NoRawDocumentContentInErrorMessages(t *testing.T) {
 	doc.BusinessInvariants[0].Statement = "very-distinctive-invariant-statement-marker"
 	doc.Trigger.Description = "very-distinctive-trigger-description-marker"
 
-	res, err := Add(context.Background(), s, doc)
+	res, err := Add(context.Background(), s, doc, AddOptions{})
 	if err != nil {
 		t.Fatalf("Add: %v", err)
 	}

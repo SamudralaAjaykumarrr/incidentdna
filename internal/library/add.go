@@ -3,9 +3,11 @@
 // idempotent re-add, conflict, or corrupted-existing-entry — per
 // docs/phase-3-plan.md §5/§12/§13.
 //
-// Add does not enforce the §10 privacy gate (--allow-unredacted) or any of
-// the §11 resource limits; those are later slices (docs/phase-3-plan.md §18,
-// slices 4 and 5) layered on top of this one.
+// Add enforces the §10 privacy gate (see privacy.go, added in Slice 4)
+// immediately after validation and before any fingerprint/digest/storage
+// work. Add does not enforce any of the §11 resource limits; those are a
+// later slice (docs/phase-3-plan.md §18, slice 5) layered on top of this
+// one.
 package library
 
 import (
@@ -77,10 +79,18 @@ type AddResult struct {
 	// Digest is the bare (unprefixed) 64-character lowercase hex SHA-256
 	// digest of the occurrence's own canonical document bytes.
 	Digest string
+	// PrivacyOverridden is true when doc's privacy.redacted field was false
+	// (or unset) and Add proceeded only because AddOptions.AllowUnredacted
+	// was set (docs/phase-3-plan.md §10). When true, the caller (the future
+	// CLI) MUST display a warning to the user; internal/library itself never
+	// prints one. Always false when doc already declared privacy.redacted
+	// == true, regardless of AllowUnredacted.
+	PrivacyOverridden bool
 }
 
-// Add validates doc, computes its fingerprint and canonical-bytes digest,
-// and applies the occurrence-decision semantics of docs/phase-3-plan.md §5:
+// Add validates doc, enforces the §10 privacy gate, computes doc's
+// fingerprint and canonical-bytes digest, and applies the occurrence-decision
+// semantics of docs/phase-3-plan.md §5:
 //
 //  1. No existing occurrence under doc's fingerprint shares its incident.id
 //     → a new occurrence is stored (AddOutcomeStored).
@@ -91,11 +101,19 @@ type AddResult struct {
 //  4. An existing occurrence Add needed to consult is missing or corrupted
 //     → ErrCorruptedOccurrence; never reused, repaired, or overwritten.
 //
+// Before any of that occurrence-decision work, and before any bytes of doc
+// are written anywhere, Add checks docs/phase-3-plan.md §10's privacy gate
+// (see privacy.go): doc must declare privacy.redacted == true unless
+// opts.AllowUnredacted is set, in which case Add proceeds and reports
+// AddResult.PrivacyOverridden so the caller can warn (docs/phase-3-plan.md
+// §12, "checked after validation succeeds and before any
+// fingerprint/digest/storage work happens").
+//
 // incident.id (or any other document-supplied field) is never used as, or
 // concatenated into, a filesystem path — only fingerprint and digest values
 // validated by Store's parseFingerprint/parseDigestHex ever become path
 // components (docs/phase-3-plan.md §5).
-func Add(ctx context.Context, s *Store, doc *idir.Document) (AddResult, error) {
+func Add(ctx context.Context, s *Store, doc *idir.Document, opts AddOptions) (AddResult, error) {
 	if err := ctx.Err(); err != nil {
 		return AddResult{}, fmt.Errorf("library: add canceled: %w", err)
 	}
@@ -105,6 +123,11 @@ func Add(ctx context.Context, s *Store, doc *idir.Document) (AddResult, error) {
 
 	if res := validate.Validate(ctx, doc); !res.Valid() {
 		return AddResult{}, fmt.Errorf("library: %w:\n%s", ErrInvalidDocument, res.Error())
+	}
+
+	overridden, err := checkPrivacyGate(doc, opts.AllowUnredacted)
+	if err != nil {
+		return AddResult{}, err
 	}
 
 	fp, err := fingerprint.Compute(doc)
@@ -143,7 +166,7 @@ func Add(ctx context.Context, s *Store, doc *idir.Document) (AddResult, error) {
 		}
 
 		if existing.Digest == digestHex {
-			return AddResult{Outcome: AddOutcomeIdempotent, Fingerprint: fp, Digest: digestHex}, nil
+			return AddResult{Outcome: AddOutcomeIdempotent, Fingerprint: fp, Digest: digestHex, PrivacyOverridden: overridden}, nil
 		}
 		return AddResult{}, fmt.Errorf("library: %w (incident id %q, fingerprint %s)", ErrConflict, doc.Incident.ID, fp)
 	}
@@ -165,7 +188,7 @@ func Add(ctx context.Context, s *Store, doc *idir.Document) (AddResult, error) {
 		return AddResult{}, err
 	}
 
-	return AddResult{Outcome: AddOutcomeStored, Fingerprint: fp, Digest: digestHex}, nil
+	return AddResult{Outcome: AddOutcomeStored, Fingerprint: fp, Digest: digestHex, PrivacyOverridden: overridden}, nil
 }
 
 // findByIncidentID returns the single index entry sharing incidentID, or nil
