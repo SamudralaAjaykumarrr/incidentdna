@@ -1,0 +1,5 @@
+2026-09-02T14:03:11Z WARN session-gateway[node-b7]: cache miss burst detected on shard cache-07 (evictions=48213/s)
+2026-09-02T14:03:12Z ERROR session-gateway[node-b7]: session validation fallback to auth-service triggered for shard cache-07
+2026-09-02T14:03:19Z ERROR auth-service: request queue depth exceeded threshold (queue=12000, threshold=5000)
+2026-09-02T14:03:24Z ERROR session-gateway[node-b7]: auth-service validation timeout after 3 retries; treating session as invalid
+2026-09-02T14:03:24Z INFO session-gateway[node-b7]: forced logout issued for 2 sessions on shard cache-07

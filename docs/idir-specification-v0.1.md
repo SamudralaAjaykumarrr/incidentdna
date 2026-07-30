@@ -93,6 +93,14 @@ metadata (e.g. an object storage path) that the CLI never dereferences and
 that is excluded from the fingerprint. `raw_excerpt` is an optional known
 sensitive location.
 
+`incidentdna validate` only format-checks `digest`; it does not require the
+referenced bytes to exist anywhere. Since Phase 2, `incidentdna evidence
+verify`/`evidence list` separately check a document's `evidence[].digest`
+values against a local content-addressed store — a document authored before
+that store existed, or whose evidence was never stored, is not invalid; it
+simply reports every entry MISSING. See
+[`evidence-storage.md`](evidence-storage.md).
+
 ### `reproduction_sequence`
 
 An ordered list of `{step, description, ref_event_id?}`. If `ref_event_id`

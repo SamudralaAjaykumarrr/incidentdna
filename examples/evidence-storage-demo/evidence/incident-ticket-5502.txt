@@ -1,0 +1,9 @@
+Ticket: INC-5502
+Summary: Users on shard cache-07 reported unexpected logout starting 14:03 UTC.
+Reporter: on-call-engineer (fictional)
+Notes: Correlated with a scheduled cache-07 node restart. Session validation
+fell back to auth-service, which could not absorb the full cache-miss volume
+and began shedding load, causing valid sessions to be treated as invalid.
+Resolution: Session cache client updated to retry against a replica shard
+before falling back to auth-service; auth-service rate limiting adjusted
+upward for validation-fallback traffic.

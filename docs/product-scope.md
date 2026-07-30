@@ -28,9 +28,37 @@ and compare** incidents. Concretely:
   redelivery (`examples/duplicate-payment/`).
 - A containerized development workflow (Docker + Makefile) and CI.
 
-## Explicitly out of scope for Phase 1
+## Phase 2 scope
 
-This phase does not include, and this codebase contains none of:
+Phase 2 builds directly on Phase 1's foundation, without changing it: a
+local, content-addressable **evidence store** and digest verification, so
+`evidence[].digest` (defined and format-validated since Phase 1) can be
+checked against real stored bytes. Concretely:
+
+- A local filesystem evidence store, keyed by an object's own SHA-256
+  digest (`internal/evidence`), default root
+  `.incidentdna/evidence/objects`.
+- Four CLI subcommands: `incidentdna evidence store`, `verify`, `list`,
+  `inspect`.
+- Path-traversal and symlink protections, atomic deduplicating writes, and
+  three fixed resource limits (max object size, max evidence entries per
+  command, max aggregate verification bytes per command).
+- A second, fully fictional example (`examples/evidence-storage-demo/`)
+  demonstrating the four commands end-to-end, entirely separate from
+  `examples/duplicate-payment/`.
+
+Full design in [`evidence-storage.md`](evidence-storage.md). Phase 2 does
+not change `idir.Document`, the JSON Schema, `internal/validate`'s rules,
+`internal/canonical`, or `internal/fingerprint` — the fingerprint payload
+already excluded evidence entirely in Phase 1, and continues to.
+Verifying a stored object's integrity is not the same as proving the
+evidence is truthful or establishing who produced it — see
+[`evidence-storage.md`](evidence-storage.md), "Integrity versus
+authenticity," for that distinction.
+
+## Explicitly out of scope for Phase 1 and Phase 2
+
+This codebase, through the end of Phase 2, contains none of:
 
 - React, FastAPI, or any web/API framework.
 - Kubernetes or any cloud infrastructure.
@@ -40,11 +68,16 @@ This phase does not include, and this codebase contains none of:
 - SaaS authentication, billing, or customer management.
 - Real fault injection against a running system.
 - Any changes to, or reuse of, the separate OmniFlow repository.
+- Release gating or integration with any release pipeline.
+- Remote/cloud evidence storage, encryption at rest for evidence, evidence
+  signing or authenticity proof, multi-tenant/shared-store access control,
+  or garbage collection of orphaned evidence objects.
 
 These are all real future needs (see [`phase-1-report.md`](phase-1-report.md),
-"Recommended Phase 2 scope"), but Phase 1's job is to get the underlying
-representation and its guarantees (determinism, validation completeness,
-safety against hostile input) right before anything is built on top of it.
+"Recommended Phase 2 scope", and [`phase-2-plan.md`](phase-2-plan.md) §16),
+but each phase's job is to get its own layer's guarantees right — Phase 1 the
+document representation, Phase 2 local evidence integrity — before anything
+further is built on top.
 
 ## Why this order
 
