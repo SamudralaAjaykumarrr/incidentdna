@@ -1,0 +1,164 @@
+# IncidentDNA IDIR document — synthetic example for Phase 2 evidence storage.
+#
+# Scenario: a scheduled restart of one session-cache node caused a burst of
+# cache misses that overloaded the fallback auth-service, which began
+# shedding load and caused valid sessions on that shard to be treated as
+# invalid ("mass logout"). This scenario is unrelated to
+# examples/duplicate-payment/ (a different application, different failure
+# class, different evidence) — it exists specifically to demonstrate the
+# Phase 2 evidence store commands (`evidence store|verify|list|inspect`)
+# against real, checked-in fictional evidence files, which
+# examples/duplicate-payment/incident.yaml deliberately does not have.
+#
+# All identifiers below are fictional. No real credentials, customer data,
+# personal information, or production evidence are contained in this file or
+# in evidence/.
+schema_version: "0.1"
+
+incident:
+  id: INC-2026-0902
+  title: Mass session invalidation after scheduled cache node restart
+  summary: >
+    A scheduled restart of session-cache node cache-07 produced a burst of
+    cache misses. session-gateway's fallback path routed the resulting
+    validation load to auth-service, which could not absorb the full volume
+    and began shedding requests. session-gateway treated the resulting
+    timeouts as invalid sessions and forced logout for every affected user
+    on that shard.
+  occurred_at: "2026-09-02T14:03:00Z"
+  detected_at: "2026-09-02T14:04:30Z"
+  resolved_at: "2026-09-02T14:22:00Z"
+
+application:
+  name: northwind-portal
+  service: session-gateway
+  environment: production
+  release_version: "1.9.3"
+  commit_ref: 7c2e9b4a1d6f8c0e3b5a7d9f1c3e5b7d9f1a3c5e
+
+trigger:
+  type: cache-node-restart
+  description: >
+    Scheduled maintenance restarted session-cache node cache-07, discarding
+    its resident session entries and causing every subsequent lookup against
+    that shard to miss until the cache repopulated.
+  preconditions:
+    - session-gateway falls back to auth-service on any cache miss
+    - auth-service has no dedicated capacity reserved for fallback traffic
+    - cache client does not retry against a replica shard before falling back
+
+events:
+  - id: evt-cache-node-restarted
+    type: infrastructure-restart
+    description: >
+      session-cache node cache-07 completes a scheduled restart, resident
+      session state for that shard is gone.
+  - id: evt-cache-miss-burst
+    type: cache-miss-burst
+    description: >
+      session-gateway observes a sustained burst of cache misses against
+      shard cache-07 as normal traffic resumes.
+    caused_by:
+      - evt-cache-node-restarted
+  - id: evt-fallback-overload
+    type: dependency-overload
+    description: >
+      session-gateway's fallback validation calls exceed auth-service's
+      request queue threshold; auth-service begins shedding load.
+    caused_by:
+      - evt-cache-miss-burst
+  - id: evt-sessions-treated-invalid
+    type: false-negative-validation
+    description: >
+      session-gateway interprets auth-service timeouts as failed validation
+      rather than as a capacity problem, and treats the affected sessions as
+      invalid.
+    caused_by:
+      - evt-fallback-overload
+  - id: evt-mass-logout
+    type: forced-logout
+    description: >
+      Every user with a session resident on shard cache-07 is logged out and
+      must re-authenticate.
+    caused_by:
+      - evt-sessions-treated-invalid
+
+services:
+  - name: session-gateway
+    role: session-validation
+    technology_category: api-gateway
+  - name: session-cache-prod
+    role: local-state-store
+    technology_category: distributed-cache
+  - name: auth-service
+    role: fallback-dependency
+    technology_category: authentication-service
+
+side_effects:
+  - type: forced_logout
+    description: >
+      All users with a session resident on shard cache-07 were logged out and
+      had to re-authenticate, regardless of whether their own session was
+      actually still valid.
+    affected_entity: shard-cache-07-sessions
+    reversible: true
+
+business_invariants:
+  - id: inv-single-node-restart-isolated
+    statement: >
+      Restarting a single session-cache node must not degrade session
+      validation availability for users outside that node's shard, and must
+      not cause valid sessions to be treated as invalid.
+
+expected_corrected_behavior:
+  - >
+    On a cache miss, the session cache client retries against a healthy
+    replica shard before falling back to auth-service, so a single node
+    restart does not produce a fallback traffic spike.
+  - >
+    auth-service reserves dedicated capacity for fallback validation traffic
+    so that a burst of legitimate fallback requests is queued and served
+    rather than shed and misread as invalid sessions.
+
+evidence:
+  - id: ev-session-gateway-log
+    type: log
+    location: evidence/session-gateway.log
+    digest: "sha256:f010c383e443d6ead7da242d34f47b31728bffe97ff6ccd7e9c053d2a7757182"
+  - id: ev-cache-restart-event
+    type: infrastructure-event
+    location: evidence/cache-node-restart-event.json
+    digest: "sha256:8e0a40c2a2dd178fe81629b92232773f4f8db4216ae87a4803bf1108e016ac50"
+  - id: ev-incident-ticket
+    type: ticket
+    location: evidence/incident-ticket-5502.txt
+    digest: "sha256:dc82088f4607ac84076bd093a0aba2cd97f6a0336dc4b6a07d82c6ed8c0e4fc7"
+
+reproduction_sequence:
+  - step: 1
+    description: Restart one session-cache node while it holds resident session state.
+    ref_event_id: evt-cache-node-restarted
+  - step: 2
+    description: Resume normal traffic and observe a sustained cache-miss burst on that shard.
+    ref_event_id: evt-cache-miss-burst
+  - step: 3
+    description: >
+      Observe the fallback validation load exceed auth-service's request
+      queue threshold, causing it to shed requests.
+    ref_event_id: evt-fallback-overload
+  - step: 4
+    description: >
+      Observe session-gateway interpret the resulting timeouts as invalid
+      sessions rather than as a capacity problem.
+    ref_event_id: evt-sessions-treated-invalid
+  - step: 5
+    description: Observe every session on the affected shard forced to log out.
+    ref_event_id: evt-mass-logout
+
+privacy:
+  sensitivity: internal
+  redacted: false
+  notes: >
+    Contains only synthetic identifiers, fictional log/event/ticket content,
+    and fictional evidence files checked into evidence/; no real customer,
+    credential, or production data is present.

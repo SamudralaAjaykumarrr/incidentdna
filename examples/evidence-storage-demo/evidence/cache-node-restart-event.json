@@ -1,0 +1,9 @@
+{
+  "event": "cache-node-restart",
+  "node": "cache-07",
+  "cluster": "session-cache-prod",
+  "restart_reason": "scheduled-maintenance",
+  "started_at": "2026-09-02T14:03:00Z",
+  "completed_at": "2026-09-02T14:03:45Z",
+  "sessions_resident_estimate": 48213
+}

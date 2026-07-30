@@ -36,6 +36,7 @@ var commands = []command{
 	{"fingerprint", runFingerprint},
 	{"inspect", runInspect},
 	{"compare", runCompare},
+	{"evidence", runEvidence},
 }
 
 func main() {
@@ -85,6 +86,9 @@ Usage:
   incidentdna compare <file-a> <file-b>
       Report whether two IDIR documents share the same normalized incident
       fingerprint, and explain material differences if they do not.
+  incidentdna evidence <store|verify|list|inspect> ...
+      Local content-addressed evidence storage and digest verification.
+      Run "incidentdna evidence help" for subcommand details.
 
 incidentdna performs no network access and collects no telemetry.
 `)

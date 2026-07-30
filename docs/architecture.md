@@ -9,16 +9,23 @@ internal/validate/      Semantic rule engine (Result/Issue + rule functions)
 internal/canonical/     Deterministic ("canonical") JSON re-encoder
 internal/fingerprint/   Identity-payload extraction -> canonical -> sha256
 internal/compare/       Fingerprint comparison + per-dimension diff
+internal/evidence/      Local content-addressed evidence store + digest verification
 schemas/idir/v0.1/      Documentation-grade JSON Schema for the format
-examples/duplicate-payment/  Synthetic example used by tests and `make example`
+examples/duplicate-payment/     Synthetic example used by tests and `make example`
+examples/evidence-storage-demo/ Separate synthetic example for `incidentdna evidence`
 testdata/golden/        Golden fingerprint + one fixture per rejected validation case
 ```
 
 Dependency direction is strictly one-way:
-`idir` ← `validate`, `fingerprint`; `canonical` ← `fingerprint`; `fingerprint`
-← `compare`; all of the above ← `cmd/incidentdna`. Nothing in `internal/`
-imports `cmd/incidentdna`, and nothing in `internal/idir` imports any other
-internal package — it is the shared vocabulary everything else builds on.
+`idir` ← `validate`, `fingerprint`, `evidence`; `canonical` ← `fingerprint`;
+`fingerprint` ← `compare`; all of the above ← `cmd/incidentdna`. Nothing in
+`internal/` imports `cmd/incidentdna`, and nothing in `internal/idir`
+imports any other internal package — it is the shared vocabulary everything
+else builds on. `internal/evidence` imports `internal/idir` the same way
+`fingerprint` and `compare` already do (to read `doc.Evidence` entries); it
+does not import, and is not imported by, `validate`, `canonical`,
+`fingerprint`, or `compare` — evidence storage is a parallel concern, not a
+dependency of the document-representation/fingerprinting pipeline.
 
 ## Data flow
 
@@ -47,6 +54,26 @@ dimension-by-dimension diff (trigger, causal structure, invariants, side
 effect types, recovery behavior, technology categories) — that diff logic is
 presentation only and never affects the fingerprint value itself.
 
+## Evidence storage (Phase 2)
+
+`internal/evidence` is a parallel data flow, not a stage inserted into the
+one above — it never runs as part of `validate`/`fingerprint`/`compare`, and
+nothing about its output changes a fingerprint:
+
+```
+evidence file bytes (evidence store)          idir.Document (evidence verify/list)
+   │  stream + sha256                            │  for each evidence[] entry
+   ▼                                              ▼
+digest-derived object path                    Store.objectPath(digest) lookup
+   │  atomic write (temp file + rename)           │  Lstat (list) or open+re-hash (verify)
+   ▼                                              ▼
+object at <store-root>/<shard>/<hash>         OK / MISSING / CORRUPTED / INVALID per entry
+```
+
+See [`docs/evidence-storage.md`](evidence-storage.md) for the full design:
+store layout, the four `incidentdna evidence` subcommands, resource limits,
+and path-traversal/symlink protections.
+
 ## CLI conventions
 
 - **Exit codes**: `0` success; `1` I/O, parse, or usage error; `2` semantic
@@ -63,6 +90,10 @@ presentation only and never affects the fingerprint value itself.
   free-text metadata; the CLI never opens, fetches, or otherwise interprets
   it. This is a deliberate scope boundary, not an oversight — see
   [`threat-model.md`](threat-model.md), "Path traversal through CLI inputs."
+  This holds for the evidence store too: `evidence store`/`verify`/`list`/
+  `inspect` derive every filesystem path from a validated digest, never from
+  `location`, an evidence entry's `id`/`type`, or the original filename
+  passed to `store` — see [`evidence-storage.md`](evidence-storage.md).
 
 ## Rejected alternatives
 

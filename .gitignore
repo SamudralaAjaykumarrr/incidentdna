@@ -11,3 +11,14 @@ node_modules/
 .vscode/
 *.log
 .DS_Store
+
+# Phase 2: local content-addressed evidence store output (never committed —
+# see docs/evidence-storage.md). Only the default root is named here; a
+# custom --store directory outside the repository is the caller's own
+# responsibility to keep out of git, same as any other --store <dir> value.
+.incidentdna/
+
+# Checked-in fictional evidence used by examples/evidence-storage-demo/ —
+# exempted from the generic *.log ignore above so it can actually be
+# committed; this is synthetic example content, not a generated log file.
+!examples/evidence-storage-demo/evidence/*.log
