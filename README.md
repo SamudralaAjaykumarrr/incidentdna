@@ -97,6 +97,30 @@ executable regression scenarios). A third, fully fictional example,
 to demonstrate `add`/`check`/`list` end-to-end without touching
 `examples/duplicate-payment/` or `examples/evidence-storage-demo/`.
 
+## Phase 4: deterministic executable regression scenarios
+
+Phase 4 adds a small, reviewable, versioned document format — a **regression
+scenario** (IRS v0.1) — and a local, bounded, offline runner
+(`incidentdna scenario verify|run`) that executes the one command a scenario
+declares and classifies the result as `PASS`, `FAIL`, `TIMEOUT`, `INVALID`,
+or `INTERNAL_ERROR`. A scenario declares which failure class it
+regression-tests by referencing an existing IDIR fingerprint
+(`internal/fingerprint.Compute`, unchanged), optionally checked against a
+real incident file with `scenario verify --source`. The runner never invokes
+a shell and never performs an implicit `$PATH` lookup, runs the declared
+command inside a freshly created, bounded, non-persistent workspace under a
+timeout and output cap, and writes a deterministic JSON execution report on
+request. See [`docs/regression-scenarios.md`](docs/regression-scenarios.md)
+for the full design — the scenario document format, the safety model
+("bounded, not sandboxed" — this is the first phase to execute local
+processes, and the runner does not sandbox what it launches), resource
+limits, and what is explicitly *not* covered (no release gating, no suite
+runner, no coupling to the incident library). A fourth, fully fictional
+example, [`examples/regression-scenario-demo/`](examples/regression-scenario-demo/),
+demonstrates all five outcomes end-to-end without touching
+`examples/duplicate-payment/`, `examples/evidence-storage-demo/`, or
+`examples/incident-library-demo/`.
+
 ## CLI commands
 
 ```
@@ -152,15 +176,32 @@ incidentdna library list [--library <dir>]
     count and a bounded per-occurrence summary (incident id, title,
     application/service, occurred timestamp) — never the full stored
     document.
+
+incidentdna scenario verify [--source <incident-file>] <scenario-file>
+    Structurally/semantically validate <scenario-file> against the IRS v0.1
+    rules. Never executes anything. If --source is given, additionally
+    validate and fingerprint <incident-file> through the unchanged Phase 1
+    pipeline and assert the result equals the scenario's declared
+    linked_fingerprint.
+
+incidentdna scenario run [--workspace <dir>] [--report <file>]
+                          [--keep-workspace] <scenario-file>
+    Run the same checks as scenario verify. If they pass, create a bounded,
+    non-persistent workspace, stage execution.workspace_files, execute
+    execution.command under its declared/default timeout with output capped
+    per stream, and compare the result against expected. Reports PASS, FAIL,
+    TIMEOUT, INVALID, or INTERNAL_ERROR, and optionally writes a
+    deterministic JSON execution report to --report.
 ```
 
 Exit codes are meaningful and relied on by CI: `0` success, `1`
 I/O/parse/usage error, `2` semantic validation failure (or, for `evidence
-verify`/`evidence inspect`, a MISSING/CORRUPTED finding; or, for `library
-check`, no matching fingerprint found). See
-[`docs/evidence-storage.md`](docs/evidence-storage.md) and
-[`docs/incident-library.md`](docs/incident-library.md) for the full
-`evidence` and `library` command references.
+verify`/`evidence inspect`, a MISSING/CORRUPTED finding; for `library
+check`, no matching fingerprint found; or, for `scenario run`, a FAIL or
+TIMEOUT outcome). See [`docs/evidence-storage.md`](docs/evidence-storage.md),
+[`docs/incident-library.md`](docs/incident-library.md), and
+[`docs/regression-scenarios.md`](docs/regression-scenarios.md) for the full
+`evidence`, `library`, and `scenario` command references.
 
 `incidentdna` performs no network access and collects no telemetry —
 every subcommand is pure local file I/O.
@@ -176,7 +217,7 @@ make lint     # gofmt -l check + go vet
 make test     # go test ./... -race -count=1
 make build    # go build -o bin/incidentdna ./cmd/incidentdna
 make example  # build, then validate + fingerprint examples/duplicate-payment/incident.yaml
-make verify   # lint + test + build + example + golden fingerprint check
+make verify   # lint + test + build + example + example-evidence + example-library + example-scenario + golden fingerprint check
 make clean    # rm -rf bin
 ```
 
@@ -220,10 +261,12 @@ internal/fingerprint/  Identity-payload extraction -> canonical -> sha256
 internal/compare/      Fingerprint comparison + per-dimension diff
 internal/evidence/     Local content-addressed evidence store + digest verification
 internal/library/      Local incident library: occurrences grouped by fingerprint
+internal/scenario/     Local, bounded, offline regression-scenario runner (IRS v0.1)
 schemas/idir/v0.1/     Documentation-grade JSON Schema for the format
 examples/duplicate-payment/     Synthetic example used by tests and `make example`
 examples/evidence-storage-demo/ Separate synthetic example for `incidentdna evidence`
 examples/incident-library-demo/ Separate synthetic example for `incidentdna library`
+examples/regression-scenario-demo/ Separate synthetic example for `incidentdna scenario`
 testdata/golden/       Golden fingerprint + one fixture per rejected validation case
 ```
 
@@ -297,6 +340,14 @@ exact field-by-field inclusion table and the reasoning behind it.
   (`--allow-unredacted` overrides it with a mandatory warning); that flag is
   author-declared, not independently verified. See
   [`docs/incident-library.md`](docs/incident-library.md).
+- **Regression scenario execution is bounded, not sandboxed.** `incidentdna
+  scenario run` never invokes a shell, never performs an implicit `$PATH`
+  lookup, and never writes outside its resolved workspace and the
+  user-named `--report` path — but it does not sandbox the process it
+  launches: a reviewed scenario's command runs with the full OS-level
+  permissions of the invoking user. The safety mechanism is human review of
+  the scenario file before running, not runtime containment. See
+  [`docs/regression-scenarios.md`](docs/regression-scenarios.md).
 - **Documents decode into a fixed typed struct**, never
   `interface{}`/`map[string]interface{}`, closing off a class of YAML-parser
   abuse.
@@ -321,12 +372,12 @@ are in [`docs/threat-model.md`](docs/threat-model.md) and
 
 ```
 cmd/incidentdna/    CLI entrypoint and subcommands
-internal/           idir, validate, canonical, fingerprint, compare, evidence, library packages
+internal/           idir, validate, canonical, fingerprint, compare, evidence, library, scenario packages
 schemas/idir/v0.1/  Documentation-grade JSON Schema for IDIR v0.1
 examples/           Synthetic example incident(s)
 testdata/golden/    Golden fingerprint and validation-rejection fixtures
 scripts/            Golden-fingerprint and demo verification scripts
-docs/               Architecture, IDIR spec, fingerprint design, evidence storage, incident library, threat model, privacy model, product scope
+docs/               Architecture, IDIR spec, fingerprint design, evidence storage, incident library, regression scenarios, threat model, privacy model, product scope
 Dockerfile.dev, compose.yaml, Makefile   Containerized dev/build/test workflow
 ```
 
@@ -338,11 +389,14 @@ dependency on any storage, transport, or UI layer. Phase 2 adds a local
 evidence store and digest verification on top of that foundation, without
 changing it. Phase 3 adds a local incident library — validated occurrences
 grouped by fingerprint, with lookup — on top of both, again without changing
-either. Within that combined scope, the following limitations are by
-design — see [`docs/threat-model.md`](docs/threat-model.md),
+either. Phase 4 adds a local, bounded, offline regression-scenario runner on
+top of all three, again without changing any of them. Within that combined
+scope, the following limitations are by design — see
+[`docs/threat-model.md`](docs/threat-model.md),
 [`docs/privacy-model.md`](docs/privacy-model.md),
-[`docs/evidence-storage.md`](docs/evidence-storage.md), and
-[`docs/incident-library.md`](docs/incident-library.md):
+[`docs/evidence-storage.md`](docs/evidence-storage.md),
+[`docs/incident-library.md`](docs/incident-library.md), and
+[`docs/regression-scenarios.md`](docs/regression-scenarios.md):
 
 - **No semantic tamper detection.** Validation checks internal coherence
   (no dangling refs, no cycles, required fields present), not whether a
@@ -374,6 +428,18 @@ design — see [`docs/threat-model.md`](docs/threat-model.md),
   recorded for it — not that the incident is truthful, that its author
   reviewed it, or who added it. It has no user accounts, no access control,
   and no concept of an incident being "approved."
+- **Regression scenario execution is bounded, not sandboxed, and is not a
+  release gate.** `incidentdna scenario run` executes exactly one declared
+  local command per invocation with no shell interpretation and no implicit
+  `$PATH` lookup, inside a freshly created, bounded, non-persistent
+  workspace — but it does not sandbox the process it launches (no seccomp,
+  cgroups, container, or VM isolation), and its exit code/JSON report are
+  not wired into any CI/CD pipeline or merge check by this codebase. There
+  is no suite runner (exactly one scenario per invocation) and no automatic
+  coupling to the incident library. The eight resource limits in
+  `internal/scenario/limits.go` are fixed, not configurable. See
+  [`docs/regression-scenarios.md`](docs/regression-scenarios.md) for the
+  full list.
 
 This codebase contains no React/web framework, no Kubernetes or cloud
 infrastructure, no Kafka or event-ingestion integration, no OpenTelemetry or
@@ -425,11 +491,28 @@ is not integrated with any other repository.
 - See [`docs/incident-library.md`](docs/incident-library.md) for the full
   design and its explicit limitations.
 
+**Implemented (Phase 4, this repository):**
+
+- A local, bounded, offline regression-scenario runner (IRS v0.1 document
+  format, `internal/scenario/`)
+- `incidentdna scenario verify` / `run`, including the `--source`
+  fingerprint-linkage cross-check
+- Five-outcome classification (`PASS`/`FAIL`/`TIMEOUT`/`INVALID`/`INTERNAL_ERROR`)
+  with a deterministic JSON execution report (`--report`)
+- No shell interpretation, no implicit `$PATH` lookup, workspace
+  containment, timeout enforcement (process-group kill), bounded
+  stream-separated output capture, and eight fixed resource limits
+- A fourth, fully fictional `examples/regression-scenario-demo/` example
+- See [`docs/regression-scenarios.md`](docs/regression-scenarios.md) for the
+  full design, the safety model, and its explicit limitations.
+
 **Future work (not started, not scoped, not implemented in this codebase):**
 ingestion from observability/event systems, integration into release gating,
-evidence/library signing or authenticity proof, remote/cloud storage for
-either the evidence store or the incident library, and any of the other
-items listed as explicitly out of scope in
+a suite/aggregation layer for running many scenarios at once, automatic
+cross-referencing of a scenario's `linked_fingerprint` against incident
+library occurrences, evidence/library signing or authenticity proof,
+remote/cloud storage for the evidence store, incident library, or
+scenarios, and any of the other items listed as explicitly out of scope in
 [`docs/product-scope.md`](docs/product-scope.md). None of this exists yet;
 treat any description of it as forward-looking, not current capability.
 
@@ -438,7 +521,7 @@ treat any description of it as forward-looking, not current capability.
 ```
 make lint     # gofmt -l check + go vet
 make test     # go test ./... -race -count=1
-make verify   # full local == CI check: lint + test + build + example + golden fingerprint
+make verify   # full local == CI check: lint + test + build + examples + golden fingerprint
 ```
 
 Run a single test:

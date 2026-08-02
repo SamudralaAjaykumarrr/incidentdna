@@ -38,6 +38,7 @@ var commands = []command{
 	{"compare", runCompare},
 	{"evidence", runEvidence},
 	{"library", runLibrary},
+	{"scenario", runScenario},
 }
 
 func main() {
@@ -54,8 +55,20 @@ func run(args []string) int {
 		if args[0] == c.name {
 			ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 			defer cancel()
-			ctx, cancelTimeout := context.WithTimeout(ctx, commandTimeout)
-			defer cancelTimeout()
+			// "scenario" is special-cased: scenario run needs its own,
+			// larger, document-declared timeout budget for the child
+			// process it executes, up to MaxScenarioTimeoutSeconds — not
+			// the fixed commandTimeout every other subcommand uses, which
+			// was sized for parsing/hashing a document, a categorically
+			// smaller workload (docs/phase-4-plan.md §10). runScenario
+			// applies commandTimeout itself for the "verify" subcommand,
+			// which never executes anything and keeps that budget
+			// unchanged.
+			if c.name != "scenario" {
+				var cancelTimeout context.CancelFunc
+				ctx, cancelTimeout = context.WithTimeout(ctx, commandTimeout)
+				defer cancelTimeout()
+			}
 			return c.run(ctx, args[1:])
 		}
 	}
@@ -94,6 +107,12 @@ Usage:
       Local incident library: persist validated incident occurrences and
       look up whether a candidate document's fingerprint already exists.
       Run "incidentdna library help" for subcommand details.
+  incidentdna scenario <verify|run> ...
+      Deterministic executable regression scenarios (IRS v0.1): verify a
+      scenario document, or run its declared command in a bounded,
+      offline, local workspace and compare the result against an
+      expected outcome. Run "incidentdna scenario help" for subcommand
+      details.
 
 incidentdna performs no network access and collects no telemetry.
 `)

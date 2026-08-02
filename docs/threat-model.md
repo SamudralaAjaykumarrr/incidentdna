@@ -1,9 +1,15 @@
 # Threat Model
 
 Scope: the `incidentdna` CLI and the `internal/*` libraries it's built on,
-as they exist at the end of Phase 3 — local file input, local file/stdout
-output plus a local content-addressed evidence store and a local incident
-library, no network, no multi-user or multi-tenant concerns yet.
+as they exist at the end of Phase 4 — local file input, local file/stdout
+output, a local content-addressed evidence store, a local incident library,
+and a local, bounded, offline regression-scenario runner. No network, no
+multi-user or multi-tenant concerns. Phase 4 introduces one new class of
+risk this scope statement did not previously need to cover: local process
+execution (see "Executable regression scenarios: local process-execution
+risks (Phase 4)" below) — every prior phase's operations were pure
+data/filesystem transformations that never executed the content they
+processed.
 
 ## Maliciously modified incident documents
 
@@ -216,6 +222,100 @@ every other subcommand already has. See
 [`incident-library.md`](incident-library.md), "Resource limits," for the
 full detail.
 
+## Executable regression scenarios: local process-execution risks (Phase 4)
+
+Phase 4 introduces local process execution for the first time in this
+codebase, so its safety model is explicitly weaker in one dimension than
+every prior phase's pure-data-and-filesystem operations — this section
+states that plainly rather than implying a guarantee that isn't real:
+
+- **Malicious or careless scenario authorship.** A scenario file is
+  reviewable text, but nothing in Phase 4 prevents its author from
+  declaring a `command` that is itself destructive, reaches the network, or
+  reads unrelated local files. The safety model is *review before running*,
+  not runtime sandboxing — a real, testable sandboxing mechanism
+  (containers/VMs/seccomp) is explicitly out of scope for this phase. This
+  is an accepted, fundamental limitation, not a gap to be closed later
+  without one.
+- **Workspace path-traversal via `workspace_files`.** Mitigated
+  structurally: both `source` (resolved against the scenario file's own
+  directory) and `destination` (resolved against the workspace root) are
+  `filepath.Clean`ed and re-checked to have their respective root as a
+  prefix before any read/write; symlinks at either path are rejected, not
+  followed — the same defense-in-depth pattern `internal/library`'s
+  `checkContained` already established, applied to declared relative paths
+  instead of digest-derived ones.
+- **Resource exhaustion via a runaway or malicious command.** Mitigated by
+  `timeout_seconds` (hard-killing the process's whole process group at the
+  bound) and per-stream output caps — this bounds *this tool's* exposure
+  (hang forever, consume unbounded memory buffering output), not the
+  reviewed command's own resource usage on the host, which remains bounded
+  only by whatever OS-level limits (ulimits, cgroups) the invoking
+  environment already applies outside `incidentdna`.
+- **A scenario's `command[0]` being itself a shell or interpreter.** The
+  runner refuses to *invoke* a shell itself (`exec.Command`, never `sh -c`),
+  but cannot prevent a reviewed scenario's own declared `command[0]` from
+  being `/bin/sh` (or `python3`, `perl`, etc., referenced by an explicit
+  path) — stated explicitly as a limitation of the format rather than
+  implied to be prevented: the "no arbitrary shell execution" design
+  constraint is a property of the *runner's own code path*, and the
+  reviewability requirement above is the actual control on what an author
+  declares.
+- **TOCTOU between `scenario verify`'s pre-execution checks and `scenario
+  run`'s actual execution.** A `workspace_files` source file or
+  `command[0]` could change or disappear between the check and the use —
+  the same class of gap `docs/incident-library.md`'s "Filesystem and TOCTOU
+  limitations" already accepts for the library, restated here for process
+  execution rather than newly discovered.
+- **Detached child processes escaping timeout enforcement.**
+  `context`-based cancellation, combined with killing the child's whole
+  process group (`Setpgid` + a negative-PID `SIGKILL`), reliably terminates
+  the direct child and any children it spawned that remained in that
+  process group; a grandchild that double-forks or otherwise detaches from
+  the process group may survive past the timeout — documented as a known,
+  accepted gap, consistent with this project's stance that OS-level
+  guarantees beyond what Go's standard library provides are not
+  independently re-implemented.
+- **No network access, no telemetry, from the runner's own code** —
+  restated as unconditional and verified the same way every prior phase
+  verified it: `grep -rn '"net' cmd/ internal/` stays empty for everything
+  except the intentional, already-reviewed absence of any such import in
+  `internal/scenario` itself. This is a claim about the *runner's own Go
+  code*, not about what a scenario's *executed command* might itself do —
+  that remains entirely outside this tool's control (see the first bullet
+  above).
+
+**Integrity of the runner's own operations, not of the reviewed command.**
+Every guarantee in this section is about what `internal/scenario`'s own
+code does or refuses to do (shell out, resolve `$PATH` implicitly, write
+outside its workspace, exceed a timeout or output cap unboundedly) — never
+about what a scenario author's *reviewed command* itself does once it
+starts running. See [`regression-scenarios.md`](regression-scenarios.md),
+"A new class of risk" and "Execution isolation boundaries," for the full
+design and the exact table of what is structural versus what is a
+documented limitation.
+
+## Executable regression scenario resource limits (Phase 4)
+
+Mirroring the evidence store's and incident library's existing precedent,
+eight fixed constants in `internal/scenario/limits.go` bound the runner's
+exposure to a maliciously or accidentally oversized scenario document,
+oversized staged fixtures, oversized captured output, or a runaway/hung
+command: `MaxScenarioDocumentSize` (1 MiB), `MinScenarioTimeoutSeconds` (1),
+`DefaultScenarioTimeoutSeconds` (30), `MaxScenarioTimeoutSeconds` (300),
+`MaxWorkspaceFiles` (50), `MaxWorkspaceFileSize` (10 MiB),
+`MaxWorkspaceTotalBytes` (50 MiB), and `MaxScenarioOutputBytes` (1 MiB per
+stream). Each is enforced independently and produces a distinct, actionable
+error naming the limit and the offending value. `scenario verify` runs
+under the same 30-second overall command timeout every other subcommand
+already has; `scenario run` deliberately does **not** — it uses its own
+context derived from the scenario's own `timeout_seconds` (bounded by
+`MaxScenarioTimeoutSeconds` above), since that timeout was sized for the
+categorically different workload of executing an arbitrary bounded child
+process, not parsing/hashing a document. See
+[`regression-scenarios.md`](regression-scenarios.md), "Resource limits,"
+for the full detail.
+
 ## Path traversal through CLI inputs
 
 `incidentdna validate/fingerprint/inspect` open exactly the file path(s)
@@ -236,6 +336,19 @@ or the source filename passed to `store` — so a document cannot cause the
 CLI to read or write any path other than the one the invoking user
 explicitly named or a digest-derived path under the resolved `--store` root.
 See "Evidence store: local filesystem risks (Phase 2)" above.
+
+`incidentdna scenario verify`/`run` similarly open exactly the scenario
+file path given directly on the command line, and (for `verify --source`)
+the incident file path given directly on the command line. Every workspace
+path is derived from a `workspace_files` entry's own declared `source`/
+`destination`, each re-checked to resolve within its respective root — see
+"Executable regression scenarios: local process-execution risks (Phase 4)"
+above. The one deliberate exception to "never reads/writes anywhere the
+invoking user didn't explicitly authorize" is `execution.command` itself:
+once a reviewed scenario's declared command starts, what *it* reads or
+writes is bounded only by the invoking user's own OS-level permissions, not
+by `incidentdna` — this is the documented "bounded, not sandboxed" limit,
+not a path-traversal gap in the runner's own code.
 
 ## Resource exhaustion from maliciously large documents
 
@@ -279,16 +392,18 @@ exists and refuses to proceed (non-zero exit, no write) unless `--force` is
 passed — verified in `cmd/incidentdna/cli_test.go` and manually in
 `phase-1-report.md`. No other subcommand writes any file.
 
-## Future multi-tenant risks (explicitly out of scope through Phase 3)
+## Future multi-tenant risks (explicitly out of scope through Phase 4)
 
-Phase 3's incident library is **local and single-user, not shared or
-multi-tenant** — it is the same trust boundary as the evidence store before
-it: no concept of a tenant, user account, or access-control layer of its
-own. Every invocation, including every `library` and `evidence` subcommand,
-operates on files and a store the invoking user already has filesystem
-access to. Risks that become relevant only if a shared/remote/multi-tenant
-incident library or evidence store is built in a later phase — none of this
-exists today, and Phase 3 explicitly does not build it (see
+Phase 3's incident library and Phase 4's regression-scenario runner are
+**local and single-user, not shared or multi-tenant** — the same trust
+boundary as the evidence store before them: no concept of a tenant, user
+account, or access-control layer of its own. Every invocation, including
+every `library`, `evidence`, and `scenario` subcommand, operates on files
+(and, for `library`/`evidence`, a store) the invoking user already has
+filesystem access to. Risks that become relevant only if a
+shared/remote/multi-tenant incident library, evidence store, or scenario
+execution service is built in a later phase — none of this exists today,
+and Phase 4 explicitly does not build it (see
 [`product-scope.md`](product-scope.md)):
 
 - Cross-tenant fingerprint/identity leakage (can one tenant infer another
@@ -306,6 +421,12 @@ exists today, and Phase 3 explicitly does not build it (see
   [`evidence-storage.md`](evidence-storage.md) and
   [`incident-library.md`](incident-library.md) — appropriate for a single
   local user, not for a store shared across untrusted parties.
+- Any notion of a shared, remote, or multi-tenant *execution* service for
+  regression scenarios — `incidentdna scenario run` executes locally, once,
+  under the invoking user's own OS-level permissions; a hypothetical remote
+  runner would face an entirely different, much larger threat surface
+  (untrusted-command execution as a service) that this phase does not
+  attempt to address.
 
 None of these are mitigated today because none of the underlying
 capabilities (network service, multi-user storage, multiple callers) exist

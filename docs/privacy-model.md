@@ -127,21 +127,63 @@ operation:
   meant to be a permanent record, so there is no "remove"/expire capability
   in Phase 3.
 
-## What Phase 1, Phase 2, and Phase 3 do not do
+## Regression scenario privacy implications (Phase 4)
+
+Phase 4 adds a local, bounded, offline regression-scenario runner (see
+[`regression-scenarios.md`](regression-scenarios.md)) that, unlike the
+evidence store and incident library, persists nothing durable by default:
+
+- **Scenario documents carry no dedicated privacy/redaction block** — no
+  `privacy.redacted` equivalent. Unlike an IDIR document, a scenario is not
+  a permanent incident record; it is short-lived, reviewable execution
+  metadata. If a scenario's captured `stdout`/`stderr` excerpt or a
+  `workspace_files` fixture happens to contain sensitive content, that is
+  entirely the author's responsibility, exactly as it already is for
+  evidence files and library occurrence content — Phase 4 introduces no new
+  automatic redaction or PII scanning.
+- **Captured stdout/stderr in a `--report` file are bounded excerpts, not
+  full dumps** beyond `MaxScenarioOutputBytes`, but nothing scans them for
+  sensitive content before writing the report file — the same "no PII
+  detection over captured content" stance already stated above for stored
+  evidence bytes and library occurrences.
+- **No network access means no telemetry, no external transmission of
+  scenario content, ever** — restating the unconditional project invariant.
+- **The child process's own privacy behavior is entirely outside this
+  tool's control.** If a reviewed `execution.command` itself reads
+  sensitive local files or reaches the network, that is a property of the
+  reviewed command, not of `incidentdna scenario run`, and is explicitly out
+  of scope to detect or prevent — see
+  [`regression-scenarios.md`](regression-scenarios.md), "A new class of
+  risk."
+- **`scenario run`'s only durable output is a caller-named `--report`
+  file** — there is no default store, no `.incidentdna/scenario/...` root,
+  and no accumulation of scenario execution history anywhere. The
+  workspace itself (which may contain staged fixtures and whatever the
+  reviewed command wrote) is removed after the run unless `--keep-workspace`
+  is explicitly given, in which case its path is printed/reported for
+  manual inspection and cleanup.
+
+## What Phase 1 through Phase 4 do not do
 
 - No automatic redaction — nothing in this codebase removes or masks
   sensitive content; validation only checks that an author's manual
   redaction was complete against the known-location list.
 - No PII detection across the whole document, or across stored evidence
-  file content, or across stored library occurrences — only the specific
-  document fields listed above.
+  file content, stored library occurrences, or scenario execution
+  output/reports — only the specific document fields listed above.
 - No encryption at rest or in transit — for IDIR documents, stored evidence
-  bytes, or stored library occurrences.
+  bytes, stored library occurrences, or scenario documents/workspaces/reports.
 - No data retention or deletion policy — for IDIR documents, the evidence
-  store, or the incident library.
+  store, or the incident library. (Scenario workspaces are removed by
+  default after each run, as stated above — a different, narrower behavior
+  than "no retention policy," since there is nothing durable to retain in
+  the first place unless `--keep-workspace`/`--report` is explicitly used.)
 - No signing or authenticity proof for a library occurrence — its presence
   in the library, and a passing integrity check, prove internal
   self-consistency only, never that the incident is truthful or who added
   it (see [`incident-library.md`](incident-library.md), "Integrity versus
   authenticity"). The incident library is not an authorization or trust
-  system.
+  system. The regression-scenario runner makes no trust claim at all about
+  the command it executes — see
+  [`regression-scenarios.md`](regression-scenarios.md), "A new class of
+  risk."

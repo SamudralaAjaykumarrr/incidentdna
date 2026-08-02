@@ -1,0 +1,27 @@
+# IncidentDNA IRS v0.1 scenario document — synthetic example.
+#
+# The INVALID outcome demonstration: command[0] is "echo", a bare command
+# name with no path separator, which would require an implicit,
+# host-dependent $PATH lookup to resolve — rejected at the pre-execution
+# check `scenario verify`/`scenario run` both perform, before anything is
+# ever executed (docs/regression-scenarios.md, "Allowed and forbidden
+# operations").
+schema_version: irs/v0.1
+
+scenario:
+  id: duplicate-payment-refingerprint-invalid
+  title: Bare command name, to demonstrate the INVALID outcome
+  description: >
+    Declares execution.command[0] as a bare command name ("echo") instead of
+    an absolute path or a path relative to the workspace root, which is
+    rejected before any process is ever started.
+
+linked_fingerprint: "sha256:fc3dac016d31dcca1a58c0242c45474107dd69c1e7718d9cdebdbe357bca2a8e"
+
+execution:
+  command:
+    - "echo"
+    - "this never runs"
+
+expected:
+  exit_code: 0

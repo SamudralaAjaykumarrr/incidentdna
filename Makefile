@@ -1,4 +1,4 @@
-.PHONY: format lint test build example example-evidence example-library verify clean
+.PHONY: format lint test build example example-evidence example-library example-scenario verify clean
 
 # Every target runs inside the dev container defined by Dockerfile.dev /
 # compose.yaml, so a contributor never needs Go installed on the host.
@@ -44,7 +44,17 @@ example-evidence: build
 example-library: build
 	$(RUN) sh scripts/verify-library-demo.sh
 
-verify: lint test build example example-evidence example-library
+# Phase 4: end-to-end check of `incidentdna scenario verify|run` against
+# examples/regression-scenario-demo/, covering all five outcomes
+# (PASS/FAIL/TIMEOUT/INVALID/INTERNAL_ERROR) plus the --source
+# fingerprint-linkage cross-check, using temporary --workspace/--report
+# locations (never the current directory) so this never leaves generated
+# output in the repository. See scripts/verify-scenario-demo.sh and
+# docs/regression-scenarios.md.
+example-scenario: build
+	$(RUN) sh scripts/verify-scenario-demo.sh
+
+verify: lint test build example example-evidence example-library example-scenario
 	$(RUN) sh scripts/verify-golden-fingerprint.sh
 
 clean:

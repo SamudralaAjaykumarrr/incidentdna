@@ -1,0 +1,153 @@
+# IncidentDNA IDIR document — synthetic example.
+#
+# Scenario: duplicate payment charge caused by message redelivery racing
+# with an at-least-once payment worker that had not yet recorded local
+# completion or acknowledged the message when it crashed.
+#
+# All identifiers below are fictional. No real credentials, customer data,
+# or production evidence are contained in this file.
+schema_version: "0.1"
+
+incident:
+  id: INC-2026-0417
+  title: Duplicate payment charge after message redelivery
+  summary: >
+    A payment worker crashed after successfully committing a charge with the
+    upstream payment provider, but before it recorded local completion or
+    acknowledged the triggering message. The message broker redelivered the
+    message to a healthy worker, which processed it as new and committed a
+    second charge for the same order.
+  occurred_at: "2026-04-17T09:12:03Z"
+  detected_at: "2026-04-17T09:41:55Z"
+  resolved_at: "2026-04-17T11:20:00Z"
+
+application:
+  name: orbitcart
+  service: payment-worker
+  environment: production
+  release_version: "2.14.0"
+  commit_ref: 4f8a1c9b2e7d0a3f5c6b8e1d2a4f6c8e0b1d3f5a
+
+trigger:
+  type: message-redelivery
+  description: >
+    The message broker redelivered an order-created message after the
+    consumer that had originally received it did not acknowledge within the
+    visibility timeout, because that consumer process had already crashed.
+  preconditions:
+    - at-least-once message delivery semantics
+    - no idempotency key enforced on charge creation
+    - consumer acknowledges only after full local completion
+
+events:
+  - id: evt-order-created-consumed
+    type: message-consumed
+    description: >
+      order-created message for order-8841203 consumed by payment-worker
+      instance pw-7.
+  - id: evt-charge-committed
+    type: external-charge-committed
+    description: >
+      Payment provider accepts and commits a charge of the order total
+      against the customer's payment method on file.
+    caused_by:
+      - evt-order-created-consumed
+  - id: evt-worker-crash
+    type: process-terminated
+    description: >
+      payment-worker instance pw-7 terminates (out-of-memory kill) before
+      writing a local completion record or acknowledging the message.
+    caused_by:
+      - evt-charge-committed
+  - id: evt-message-redelivered
+    type: message-redelivered
+    description: >
+      The broker redelivers the unacknowledged order-created message to
+      payment-worker instance pw-12 after the visibility timeout elapses.
+    caused_by:
+      - evt-worker-crash
+  - id: evt-second-charge-committed
+    type: external-charge-committed
+    description: >
+      payment-worker instance pw-12 treats the redelivered message as a new
+      order and commits a second charge against the same payment method.
+    caused_by:
+      - evt-message-redelivered
+
+services:
+  - name: payment-worker
+    role: message-consumer
+    technology_category: message-queue-consumer
+  - name: order-broker
+    role: message-broker
+    technology_category: message-queue
+  - name: payment-provider-gateway
+    role: external-dependency
+    technology_category: payment-gateway
+  - name: payments-db
+    role: local-state-store
+    technology_category: relational-database
+
+side_effects:
+  - type: duplicate_charge
+    description: >
+      Customer's payment method was charged twice for order-8841203: once by
+      pw-7 and again by pw-12, for the same order total.
+    affected_entity: order-8841203
+    reversible: true
+
+business_invariants:
+  - id: inv-single-completed-charge
+    statement: At most one completed charge may exist per order.
+
+expected_corrected_behavior:
+  - >
+    Charge creation is idempotent on a deterministic key derived from the
+    order id, so a redelivered message that reaches the payment provider a
+    second time is recognized as a duplicate and no second charge occurs.
+  - >
+    Local completion state is recorded and the message acknowledged in the
+    same transaction as (or strictly after) the successful charge, so a
+    crash between charge and acknowledgment cannot occur silently.
+
+evidence:
+  - id: ev-payment-worker-logs
+    type: log
+    location: evidence/incident-2026-0417/payment-worker.log
+    digest: "sha256:1f3c9a7e5d2b8f4c6a0e9d3b7f1c5a8e2d4b6f0c8a2e4d6b8f0c2a4e6d8b0f2a"
+  - id: ev-payment-provider-webhook
+    type: external-webhook-log
+    location: evidence/incident-2026-0417/provider-webhook.json
+    digest: "sha256:9b7d5f3a1c8e6b4d2f0a8c6e4b2d0f8a6c4e2b0d8f6a4c2e0b8d6f4a2c0e8b6d"
+  - id: ev-incident-ticket
+    type: ticket
+    location: evidence/incident-2026-0417/ticket-4821.txt
+    digest: "sha256:5e3d1b9f7a5c3e1d9b7f5a3c1e9d7b5f3a1c9e7d5b3f1a9c7e5d3b1f9a7c5e3d"
+
+reproduction_sequence:
+  - step: 1
+    description: Publish an order-created message for a new order.
+    ref_event_id: evt-order-created-consumed
+  - step: 2
+    description: Allow the consumer to commit a charge with the payment provider.
+    ref_event_id: evt-charge-committed
+  - step: 3
+    description: >
+      Kill the consumer process before it writes a local completion record
+      or acknowledges the message.
+    ref_event_id: evt-worker-crash
+  - step: 4
+    description: Wait for (or force) redelivery of the same message.
+    ref_event_id: evt-message-redelivered
+  - step: 5
+    description: >
+      Observe that a second charge is committed with the payment provider
+      for the same order.
+    ref_event_id: evt-second-charge-committed
+
+privacy:
+  sensitivity: internal
+  redacted: false
+  notes: >
+    Contains only synthetic identifiers and fictional evidence paths; no
+    real customer, payment, or credential data is present.

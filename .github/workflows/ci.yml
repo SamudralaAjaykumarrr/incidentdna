@@ -32,5 +32,8 @@ jobs:
       - name: Incident library demo validation
         run: make example-library
 
+      - name: Regression scenario demo validation
+        run: make example-scenario
+
       - name: Golden fingerprint verification
         run: docker compose run --rm --remove-orphans dev sh scripts/verify-golden-fingerprint.sh
