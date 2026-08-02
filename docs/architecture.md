@@ -10,22 +10,31 @@ internal/canonical/     Deterministic ("canonical") JSON re-encoder
 internal/fingerprint/   Identity-payload extraction -> canonical -> sha256
 internal/compare/       Fingerprint comparison + per-dimension diff
 internal/evidence/      Local content-addressed evidence store + digest verification
+internal/library/       Local incident library: occurrences grouped by fingerprint
 schemas/idir/v0.1/      Documentation-grade JSON Schema for the format
 examples/duplicate-payment/     Synthetic example used by tests and `make example`
 examples/evidence-storage-demo/ Separate synthetic example for `incidentdna evidence`
+examples/incident-library-demo/ Separate synthetic example for `incidentdna library`
 testdata/golden/        Golden fingerprint + one fixture per rejected validation case
 ```
 
 Dependency direction is strictly one-way:
-`idir` ← `validate`, `fingerprint`, `evidence`; `canonical` ← `fingerprint`;
-`fingerprint` ← `compare`; all of the above ← `cmd/incidentdna`. Nothing in
-`internal/` imports `cmd/incidentdna`, and nothing in `internal/idir`
-imports any other internal package — it is the shared vocabulary everything
-else builds on. `internal/evidence` imports `internal/idir` the same way
-`fingerprint` and `compare` already do (to read `doc.Evidence` entries); it
-does not import, and is not imported by, `validate`, `canonical`,
-`fingerprint`, or `compare` — evidence storage is a parallel concern, not a
-dependency of the document-representation/fingerprinting pipeline.
+`idir` ← `validate`, `fingerprint`, `evidence`, `library`; `canonical` ←
+`fingerprint`, `library`; `fingerprint` ← `compare`, `library`; all of the
+above ← `cmd/incidentdna`. Nothing in `internal/` imports `cmd/incidentdna`,
+and nothing in `internal/idir` imports any other internal package — it is
+the shared vocabulary everything else builds on. `internal/evidence` imports
+`internal/idir` the same way `fingerprint` and `compare` already do (to read
+`doc.Evidence` entries); it does not import, and is not imported by,
+`validate`, `canonical`, `fingerprint`, or `compare` — evidence storage is a
+parallel concern, not a dependency of the document-representation/
+fingerprinting pipeline. `internal/library` imports `internal/idir`,
+`internal/fingerprint`, and `internal/canonical` — reusing
+`fingerprint.Compute` unchanged for identity and `canonical.Marshal` for an
+occurrence's own stored bytes and digest — and is not imported by `idir`,
+`validate`, `canonical`, `fingerprint`, `compare`, or `evidence`; `library`
+and `evidence` remain independent, parallel concerns that do not import each
+other.
 
 ## Data flow
 
@@ -74,6 +83,39 @@ See [`docs/evidence-storage.md`](evidence-storage.md) for the full design:
 store layout, the four `incidentdna evidence` subcommands, resource limits,
 and path-traversal/symlink protections.
 
+## Incident library (Phase 3)
+
+`internal/library` is also a parallel data flow, independent of both the
+main validate/fingerprint/compare pipeline and `internal/evidence` — it
+reuses `fingerprint.Compute` and `canonical.Marshal` unchanged rather than
+recomputing identity or canonicalization itself, and nothing about its
+output changes a fingerprint:
+
+```
+idir.Document (library add/check)              fingerprint string (library add/check)
+   │  idir.LoadFile + validate.Validate            │  fingerprint.Compute(doc)
+   ▼                                                ▼
+validated idir.Document ─────────────────────▶ fingerprint-derived directory
+                                                    │  canonical.Marshal(doc) -> canonical bytes
+                                                    │  sha256(canonical bytes) -> occurrence digest
+                                                    ▼
+                                    <library-root>/<fp shard>/<fp remainder>/
+                                        index.json   (digest -> incident.id, occurred_at)
+                                        occurrences/<digest shard>/<digest remainder>.json
+```
+
+The directory for a failure class is addressed by the document's own
+fingerprint; the occurrence object within it is addressed by the SHA-256
+digest of the occurrence's own canonical document bytes — never by
+`incident.id` or any other document-supplied value. A fingerprint groups
+potentially many occurrences (it identifies a failure *class*, not a unique
+occurrence): `library add` decides, per incoming document, whether to store
+a new occurrence, treat the add as an idempotent no-op, or refuse it as a
+conflict. See [`docs/incident-library.md`](incident-library.md) for the full
+design: store layout, the three `incidentdna library` subcommands, the
+occurrence-decision semantics, resource limits, the privacy gate, and
+path-traversal/symlink protections.
+
 ## CLI conventions
 
 - **Exit codes**: `0` success; `1` I/O, parse, or usage error; `2` semantic
@@ -93,7 +135,11 @@ and path-traversal/symlink protections.
   This holds for the evidence store too: `evidence store`/`verify`/`list`/
   `inspect` derive every filesystem path from a validated digest, never from
   `location`, an evidence entry's `id`/`type`, or the original filename
-  passed to `store` — see [`evidence-storage.md`](evidence-storage.md).
+  passed to `store` — see [`evidence-storage.md`](evidence-storage.md). The
+  incident library follows the identical rule: `library add`/`check`/`list`
+  derive every filesystem path from a validated fingerprint or occurrence
+  digest, never from `incident.id` or any other document-supplied value —
+  see [`incident-library.md`](incident-library.md).
 
 ## Rejected alternatives
 
@@ -119,7 +165,7 @@ and path-traversal/symlink protections.
   honestly scoped — see [`privacy-model.md`](privacy-model.md) for why this
   is not general-purpose PII detection.
 
-## What Phase 1 deliberately does not build
+## What this codebase deliberately does not build
 
 See [`product-scope.md`](product-scope.md) for the full list. Architecturally,
 the important point is that nothing in `internal/` assumes a particular
@@ -127,4 +173,9 @@ transport, storage engine, or caller — `idir.Document` is a plain Go struct,
 every package function is a pure transformation over it, and the CLI is a
 thin wrapper. That's what makes it safe to build a web API, a storage layer,
 or an ingestion pipeline on top of this in a later phase without having to
-revisit the core representation.
+revisit the core representation. `internal/library` (Phase 3) is itself an
+example of this: it is a new local store built entirely on Phase 1/2
+primitives (`idir`, `fingerprint`, `canonical`) without any change to them,
+and it still does not build a release gate, executable regression scenarios,
+remote/shared storage, or a signing/authenticity layer — those remain future
+work.

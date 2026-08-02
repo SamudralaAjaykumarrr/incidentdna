@@ -29,5 +29,8 @@ jobs:
       - name: Evidence store demo validation
         run: make example-evidence
 
+      - name: Incident library demo validation
+        run: make example-library
+
       - name: Golden fingerprint verification
         run: docker compose run --rm --remove-orphans dev sh scripts/verify-golden-fingerprint.sh

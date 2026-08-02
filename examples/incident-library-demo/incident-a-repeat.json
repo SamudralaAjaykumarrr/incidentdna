@@ -1,0 +1,110 @@
+{
+  "schema_version": "0.1",
+  "incident": {
+    "id": "INC-2026-0501",
+    "title": "Checkout connection pool exhaustion triggers retry storm",
+    "summary": "A slow query held a database connection past its expected duration, saturating checkout-service's connection pool. New requests queued indefinitely with no timeout, and upstream clients began retrying aggressively, amplifying load until the service became unresponsive.\n",
+    "occurred_at": "2026-05-01T14:22:10Z",
+    "detected_at": "2026-05-01T14:26:45Z",
+    "resolved_at": "2026-05-01T15:10:00Z"
+  },
+  "application": {
+    "name": "orbitcart",
+    "service": "checkout-service",
+    "environment": "production",
+    "release_version": "3.4.0",
+    "commit_ref": "7a2c4e6b8d0f2a4c6e8b0d2f4a6c8e0b2d4f6a8c"
+  },
+  "trigger": {
+    "type": "connection-pool-exhaustion",
+    "description": "checkout-service's database connection pool reached its configured maximum size and began queuing new connection requests indefinitely.\n",
+    "preconditions": [
+      "fixed-size connection pool with no acquisition timeout",
+      "a slow query can hold a connection far longer than the typical case"
+    ]
+  },
+  "events": [
+    {
+      "id": "evt-slow-query-onset",
+      "type": "slow-query-detected",
+      "description": "A single query against checkout-db begins holding its connection well past normal duration.\n"
+    },
+    {
+      "id": "evt-pool-saturated",
+      "type": "connection-pool-saturated",
+      "description": "The connection pool reaches its configured maximum size as concurrent request volume continues arriving.\n",
+      "caused_by": [
+        "evt-slow-query-onset"
+      ]
+    },
+    {
+      "id": "evt-requests-queued",
+      "type": "request-queued-indefinitely",
+      "description": "New requests queue for a connection with no acquisition timeout, backing up the request handler.\n",
+      "caused_by": [
+        "evt-pool-saturated"
+      ]
+    },
+    {
+      "id": "evt-retry-storm",
+      "type": "client-retry-storm",
+      "description": "Upstream clients time out waiting on queued requests and begin retrying, further increasing load on the saturated pool.\n",
+      "caused_by": [
+        "evt-requests-queued"
+      ]
+    }
+  ],
+  "services": [
+    {
+      "name": "checkout-service",
+      "role": "request-handler",
+      "technology_category": "web-service"
+    },
+    {
+      "name": "checkout-db",
+      "role": "local-state-store",
+      "technology_category": "relational-database"
+    }
+  ],
+  "side_effects": [
+    {
+      "type": "request_timeout_cascade",
+      "description": "Widespread request timeouts across dependent services as queued requests exceed client-side deadlines.\n",
+      "affected_entity": "checkout-service",
+      "reversible": true
+    }
+  ],
+  "business_invariants": [
+    {
+      "id": "inv-bounded-request-latency",
+      "statement": "A request must either complete or fail within a bounded time; it must never queue indefinitely.\n"
+    }
+  ],
+  "expected_corrected_behavior": [
+    "Connection acquisition from the pool must have a bounded timeout, and a request that cannot acquire a connection within that timeout must fail fast rather than queue indefinitely.\n",
+    "Client retries must use bounded exponential backoff with jitter so a saturated dependency is not amplified by a retry storm.\n"
+  ],
+  "evidence": [],
+  "reproduction_sequence": [
+    {
+      "step": 1,
+      "description": "Issue a query against checkout-db that holds its connection well past normal duration.\n",
+      "ref_event_id": "evt-slow-query-onset"
+    },
+    {
+      "step": 2,
+      "description": "Generate enough concurrent request volume to saturate the remaining pool capacity.\n",
+      "ref_event_id": "evt-pool-saturated"
+    },
+    {
+      "step": 3,
+      "description": "Observe requests queuing with no bound and clients beginning to retry.",
+      "ref_event_id": "evt-retry-storm"
+    }
+  ],
+  "privacy": {
+    "sensitivity": "internal",
+    "redacted": true,
+    "notes": "Contains only synthetic identifiers and a fictional scenario; no real customer, payment, or credential data is present.\n"
+  }
+}
