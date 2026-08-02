@@ -1,0 +1,42 @@
+# IncidentDNA IRS v0.1 scenario document — synthetic example, part of the
+# Phase 5 regression-suite-demo.
+#
+# Re-validates and re-fingerprints a frozen copy of the duplicate-payment
+# example's content through the compiled incidentdna binary, and asserts the
+# result exactly matches the pinned golden fingerprint
+# (testdata/golden/duplicate-payment.fingerprint). This is the PASS outcome
+# used by both suite-all-pass.yaml and suite-mixed.yaml.
+#
+# command[0] below is a placeholder, "/INCIDENTDNA_BIN_PLACEHOLDER" — see
+# examples/regression-scenario-demo/scenario-pass.yaml (Phase 4) and this
+# example's own README, "Why this demo uses an absolute command path", for
+# why it must be substituted rather than a portable relative path.
+schema_version: irs/v0.1
+
+scenario:
+  id: suite-demo-pass
+  title: Duplicate payment example still fingerprints and validates cleanly
+  description: >
+    Re-validates and re-fingerprints a frozen copy of the duplicate-payment
+    example's content through the compiled incidentdna binary, and asserts
+    the result exactly matches the pinned golden fingerprint.
+
+linked_fingerprint: "sha256:fc3dac016d31dcca1a58c0242c45474107dd69c1e7718d9cdebdbe357bca2a8e"
+
+execution:
+  workspace_files:
+    - source: fixtures/incident.yaml
+      destination: incident.yaml
+  command:
+    - "/INCIDENTDNA_BIN_PLACEHOLDER"
+    - "fingerprint"
+    - "incident.yaml"
+  env:
+    LC_ALL: "C"
+  timeout_seconds: 10
+
+expected:
+  exit_code: 0
+  stdout:
+    mode: contains
+    value: "sha256:fc3dac016d31dcca1a58c0242c45474107dd69c1e7718d9cdebdbe357bca2a8e"

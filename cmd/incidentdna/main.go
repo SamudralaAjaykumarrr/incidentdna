@@ -39,6 +39,7 @@ var commands = []command{
 	{"evidence", runEvidence},
 	{"library", runLibrary},
 	{"scenario", runScenario},
+	{"suite", runSuite},
 }
 
 func main() {
@@ -55,16 +56,19 @@ func run(args []string) int {
 		if args[0] == c.name {
 			ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 			defer cancel()
-			// "scenario" is special-cased: scenario run needs its own,
-			// larger, document-declared timeout budget for the child
-			// process it executes, up to MaxScenarioTimeoutSeconds — not
-			// the fixed commandTimeout every other subcommand uses, which
-			// was sized for parsing/hashing a document, a categorically
-			// smaller workload (docs/phase-4-plan.md §10). runScenario
-			// applies commandTimeout itself for the "verify" subcommand,
-			// which never executes anything and keeps that budget
-			// unchanged.
-			if c.name != "scenario" {
+			// "scenario" and "suite" are special-cased: scenario run needs
+			// its own, larger, document-declared timeout budget for the
+			// child process it executes, up to MaxScenarioTimeoutSeconds,
+			// and suite run needs its own budget for the (potentially many)
+			// bounded child-process executions it performs in sequence, up
+			// to suite.MaxSuiteTotalTimeoutSeconds — not the fixed
+			// commandTimeout every other subcommand uses, which was sized
+			// for parsing/hashing a document, a categorically smaller
+			// workload (docs/phase-4-plan.md §10, docs/phase-5-plan.md
+			// §13). runScenario/runSuite each apply commandTimeout
+			// themselves for their own "verify" subcommand, which never
+			// executes anything and keeps that budget unchanged.
+			if c.name != "scenario" && c.name != "suite" {
 				var cancelTimeout context.CancelFunc
 				ctx, cancelTimeout = context.WithTimeout(ctx, commandTimeout)
 				defer cancelTimeout()
@@ -113,6 +117,11 @@ Usage:
       offline, local workspace and compare the result against an
       expected outcome. Run "incidentdna scenario help" for subcommand
       details.
+  incidentdna suite <verify|run> ...
+      Scenario suite manifests (ISM v0.1): verify a suite manifest and
+      every scenario it lists, or run them all sequentially, in declared
+      order, and report the aggregate PASS/FAIL result. Run
+      "incidentdna suite help" for subcommand details.
 
 incidentdna performs no network access and collects no telemetry.
 `)

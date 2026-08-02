@@ -1,0 +1,16 @@
+# IncidentDNA ISM v0.1 suite manifest — synthetic example.
+#
+# Every listed scenario PASSes individually, so `suite run` reports the
+# aggregate PASS outcome and exits 0.
+schema_version: suite/v0.1
+
+suite:
+  id: suite-demo-all-pass
+  title: Every listed scenario passes
+  description: >
+    Demonstrates the aggregate PASS outcome: every scenario this suite
+    lists individually PASSes, so `suite run` exits 0.
+
+scenarios:
+  - path: scenarios/scenario-pass.yaml
+  - path: scenarios/scenario-trivial-pass.yaml

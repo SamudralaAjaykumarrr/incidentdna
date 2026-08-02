@@ -1,0 +1,31 @@
+# IncidentDNA IRS v0.1 scenario document — synthetic example, part of the
+# Phase 5 regression-suite-demo.
+#
+# The FAIL outcome demonstration: identical execution to scenario-pass.yaml
+# (same command, same staged fixture), but expected.exit_code is
+# deliberately declared as 1 — the real command exits 0 — so the command
+# runs to completion within its timeout but does not match `expected`.
+schema_version: irs/v0.1
+
+scenario:
+  id: suite-demo-fail
+  title: Deliberately wrong expected exit code, to demonstrate the FAIL outcome
+  description: >
+    Runs the exact same command as suite-demo-pass but declares an
+    expected.exit_code that does not match the command's real exit code,
+    demonstrating a genuine expected-versus-actual mismatch within a suite.
+
+linked_fingerprint: "sha256:fc3dac016d31dcca1a58c0242c45474107dd69c1e7718d9cdebdbe357bca2a8e"
+
+execution:
+  workspace_files:
+    - source: fixtures/incident.yaml
+      destination: incident.yaml
+  command:
+    - "/INCIDENTDNA_BIN_PLACEHOLDER"
+    - "fingerprint"
+    - "incident.yaml"
+  timeout_seconds: 10
+
+expected:
+  exit_code: 1

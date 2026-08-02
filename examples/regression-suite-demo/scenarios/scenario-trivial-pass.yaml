@@ -1,0 +1,24 @@
+# IncidentDNA IRS v0.1 scenario document — synthetic example, part of the
+# Phase 5 regression-suite-demo.
+#
+# A second, independent PASS scenario with no workspace_files at all,
+# demonstrating that suite-all-pass.yaml's aggregate PASS outcome does not
+# depend on every listed scenario sharing the same fixture or command.
+schema_version: irs/v0.1
+
+scenario:
+  id: suite-demo-trivial-pass
+  title: A trivially passing scenario with no staged workspace files
+  description: >
+    Runs /bin/true (an ordinary coreutils binary) and expects exit code 0,
+    demonstrating a second, independent way to PASS within the same suite.
+
+linked_fingerprint: "sha256:fc3dac016d31dcca1a58c0242c45474107dd69c1e7718d9cdebdbe357bca2a8e"
+
+execution:
+  command:
+    - "/bin/true"
+  timeout_seconds: 5
+
+expected:
+  exit_code: 0

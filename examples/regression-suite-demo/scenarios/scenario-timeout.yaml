@@ -1,0 +1,28 @@
+# IncidentDNA IRS v0.1 scenario document — synthetic example, part of the
+# Phase 5 regression-suite-demo.
+#
+# The TIMEOUT outcome demonstration: sleeps for 5 seconds against a declared
+# timeout_seconds of 1, so `scenario run` (called once for this entry by
+# `suite run`) kills the process and reports TIMEOUT in bounded wall-clock
+# time (not hanging for the full 5 seconds). command[0] is /bin/sleep, an
+# ordinary coreutils binary — no substitution needed.
+schema_version: irs/v0.1
+
+scenario:
+  id: suite-demo-timeout
+  title: Command exceeds its declared timeout, to demonstrate the TIMEOUT outcome
+  description: >
+    Runs a command that sleeps well past a deliberately short
+    timeout_seconds, demonstrating that the scenario is killed and
+    classified TIMEOUT within a suite run rather than hanging the suite.
+
+linked_fingerprint: "sha256:fc3dac016d31dcca1a58c0242c45474107dd69c1e7718d9cdebdbe357bca2a8e"
+
+execution:
+  command:
+    - "/bin/sleep"
+    - "5"
+  timeout_seconds: 1
+
+expected:
+  exit_code: 0

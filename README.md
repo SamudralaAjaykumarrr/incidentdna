@@ -121,6 +121,30 @@ demonstrates all five outcomes end-to-end without touching
 `examples/duplicate-payment/`, `examples/evidence-storage-demo/`, or
 `examples/incident-library-demo/`.
 
+## Phase 5: scenario suites
+
+Phase 5 adds a small, reviewable, versioned manifest format — a **scenario
+suite** (ISM v0.1) — and a local, sequential, offline runner
+(`incidentdna suite verify|run`) that executes every scenario a manifest
+lists, once each, in declared order, via the unchanged Phase 4 runner
+(`internal/scenario.Run`), and aggregates the five-outcome classification
+each scenario already produces into one suite-level `PASS`/`FAIL` result. A
+suite manifest lists scenario files explicitly, by declared relative path —
+never a directory walk or glob. The runner never introduces a new
+process-execution primitive: every command a suite runs is launched by
+`internal/scenario.Run`, unchanged, exactly as if that scenario had been run
+standalone. See [`docs/scenario-suites.md`](docs/scenario-suites.md) for the
+full design — the ISM v0.1 manifest format, the safety model (identical to
+Phase 4's "bounded, not sandboxed," extended to multiple already-reviewed
+scenarios), resource limits, `--fail-fast` behavior, and what is explicitly
+*not* covered (no release gating, no directory/glob discovery, no parallel
+execution, no coupling to the incident library). A fifth, fully fictional
+example, [`examples/regression-suite-demo/`](examples/regression-suite-demo/),
+demonstrates both the aggregate PASS and aggregate FAIL outcomes end-to-end
+without touching `examples/duplicate-payment/`,
+`examples/evidence-storage-demo/`, `examples/incident-library-demo/`, or
+`examples/regression-scenario-demo/`.
+
 ## CLI commands
 
 ```
@@ -192,16 +216,33 @@ incidentdna scenario run [--workspace <dir>] [--report <file>]
     per stream, and compare the result against expected. Reports PASS, FAIL,
     TIMEOUT, INVALID, or INTERNAL_ERROR, and optionally writes a
     deterministic JSON execution report to --report.
+
+incidentdna suite verify <suite-file>
+    Structurally/semantically validate <suite-file> against the ISM v0.1
+    rules, then load and validate every listed scenario file against the
+    existing IRS v0.1 rules (scenario.Validate, unchanged). Never executes
+    anything.
+
+incidentdna suite run [--workspace-root <dir>] [--report <file>]
+                       [--keep-workspaces] [--fail-fast] <suite-file>
+    Run the same checks as suite verify. If they pass, run each listed
+    scenario in declared order via scenario.Run (unchanged), aggregate the
+    outcomes, print a per-scenario and summary line, and optionally write
+    the aggregate outcome as one deterministic JSON report to --report.
+    --fail-fast stops after the first non-PASS scenario outcome, recording
+    every scenario never reached as SKIPPED.
 ```
 
 Exit codes are meaningful and relied on by CI: `0` success, `1`
 I/O/parse/usage error, `2` semantic validation failure (or, for `evidence
 verify`/`evidence inspect`, a MISSING/CORRUPTED finding; for `library
-check`, no matching fingerprint found; or, for `scenario run`, a FAIL or
-TIMEOUT outcome). See [`docs/evidence-storage.md`](docs/evidence-storage.md),
-[`docs/incident-library.md`](docs/incident-library.md), and
-[`docs/regression-scenarios.md`](docs/regression-scenarios.md) for the full
-`evidence`, `library`, and `scenario` command references.
+check`, no matching fingerprint found; for `scenario run`, a FAIL or
+TIMEOUT outcome; or, for `suite run`, an aggregate FAIL outcome). See
+[`docs/evidence-storage.md`](docs/evidence-storage.md),
+[`docs/incident-library.md`](docs/incident-library.md),
+[`docs/regression-scenarios.md`](docs/regression-scenarios.md), and
+[`docs/scenario-suites.md`](docs/scenario-suites.md) for the full
+`evidence`, `library`, `scenario`, and `suite` command references.
 
 `incidentdna` performs no network access and collects no telemetry —
 every subcommand is pure local file I/O.
@@ -217,7 +258,7 @@ make lint     # gofmt -l check + go vet
 make test     # go test ./... -race -count=1
 make build    # go build -o bin/incidentdna ./cmd/incidentdna
 make example  # build, then validate + fingerprint examples/duplicate-payment/incident.yaml
-make verify   # lint + test + build + example + example-evidence + example-library + example-scenario + golden fingerprint check
+make verify   # lint + test + build + example + example-evidence + example-library + example-scenario + example-suite + golden fingerprint check
 make clean    # rm -rf bin
 ```
 
@@ -262,11 +303,13 @@ internal/compare/      Fingerprint comparison + per-dimension diff
 internal/evidence/     Local content-addressed evidence store + digest verification
 internal/library/      Local incident library: occurrences grouped by fingerprint
 internal/scenario/     Local, bounded, offline regression-scenario runner (IRS v0.1)
+internal/suite/        Local, sequential, offline scenario suite runner (ISM v0.1)
 schemas/idir/v0.1/     Documentation-grade JSON Schema for the format
 examples/duplicate-payment/     Synthetic example used by tests and `make example`
 examples/evidence-storage-demo/ Separate synthetic example for `incidentdna evidence`
 examples/incident-library-demo/ Separate synthetic example for `incidentdna library`
 examples/regression-scenario-demo/ Separate synthetic example for `incidentdna scenario`
+examples/regression-suite-demo/ Separate synthetic example for `incidentdna suite`
 testdata/golden/       Golden fingerprint + one fixture per rejected validation case
 ```
 
@@ -348,6 +391,13 @@ exact field-by-field inclusion table and the reasoning behind it.
   permissions of the invoking user. The safety mechanism is human review of
   the scenario file before running, not runtime containment. See
   [`docs/regression-scenarios.md`](docs/regression-scenarios.md).
+- **Scenario suite execution introduces no new class of risk.**
+  `incidentdna suite run` never calls `exec.Command` itself — it executes
+  every listed scenario by calling `internal/scenario.Run`, unchanged, once
+  each, in declared order, never in parallel. `suite verify` prints every
+  listed scenario's path and validation result before `suite run` ever
+  executes anything. See
+  [`docs/scenario-suites.md`](docs/scenario-suites.md).
 - **Documents decode into a fixed typed struct**, never
   `interface{}`/`map[string]interface{}`, closing off a class of YAML-parser
   abuse.
@@ -372,12 +422,12 @@ are in [`docs/threat-model.md`](docs/threat-model.md) and
 
 ```
 cmd/incidentdna/    CLI entrypoint and subcommands
-internal/           idir, validate, canonical, fingerprint, compare, evidence, library, scenario packages
+internal/           idir, validate, canonical, fingerprint, compare, evidence, library, scenario, suite packages
 schemas/idir/v0.1/  Documentation-grade JSON Schema for IDIR v0.1
 examples/           Synthetic example incident(s)
 testdata/golden/    Golden fingerprint and validation-rejection fixtures
 scripts/            Golden-fingerprint and demo verification scripts
-docs/               Architecture, IDIR spec, fingerprint design, evidence storage, incident library, regression scenarios, threat model, privacy model, product scope
+docs/               Architecture, IDIR spec, fingerprint design, evidence storage, incident library, regression scenarios, scenario suites, threat model, privacy model, product scope
 Dockerfile.dev, compose.yaml, Makefile   Containerized dev/build/test workflow
 ```
 
@@ -390,13 +440,15 @@ evidence store and digest verification on top of that foundation, without
 changing it. Phase 3 adds a local incident library — validated occurrences
 grouped by fingerprint, with lookup — on top of both, again without changing
 either. Phase 4 adds a local, bounded, offline regression-scenario runner on
-top of all three, again without changing any of them. Within that combined
-scope, the following limitations are by design — see
-[`docs/threat-model.md`](docs/threat-model.md),
+top of all three, again without changing any of them. Phase 5 adds a local,
+sequential, offline scenario-suite runner on top of all four, again without
+changing any of them. Within that combined scope, the following limitations
+are by design — see [`docs/threat-model.md`](docs/threat-model.md),
 [`docs/privacy-model.md`](docs/privacy-model.md),
 [`docs/evidence-storage.md`](docs/evidence-storage.md),
-[`docs/incident-library.md`](docs/incident-library.md), and
-[`docs/regression-scenarios.md`](docs/regression-scenarios.md):
+[`docs/incident-library.md`](docs/incident-library.md),
+[`docs/regression-scenarios.md`](docs/regression-scenarios.md), and
+[`docs/scenario-suites.md`](docs/scenario-suites.md):
 
 - **No semantic tamper detection.** Validation checks internal coherence
   (no dangling refs, no cycles, required fields present), not whether a
@@ -440,6 +492,15 @@ scope, the following limitations are by design — see
   `internal/scenario/limits.go` are fixed, not configurable. See
   [`docs/regression-scenarios.md`](docs/regression-scenarios.md) for the
   full list.
+- **Scenario suites aggregate, they do not gate, discover, or parallelize.**
+  `incidentdna suite run` executes every scenario a manifest explicitly
+  lists, sequentially, in declared order, via the unchanged Phase 4 runner
+  — there is no directory-walk or glob-based discovery, no parallel
+  execution, and no automatic coupling to the incident library. Its exit
+  code and JSON report are not wired into any CI/CD pipeline or merge check
+  by this codebase. The three resource limits in
+  `internal/suite/limits.go` are fixed, not configurable. See
+  [`docs/scenario-suites.md`](docs/scenario-suites.md) for the full list.
 
 This codebase contains no React/web framework, no Kubernetes or cloud
 infrastructure, no Kafka or event-ingestion integration, no OpenTelemetry or
@@ -506,13 +567,31 @@ is not integrated with any other repository.
 - See [`docs/regression-scenarios.md`](docs/regression-scenarios.md) for the
   full design, the safety model, and its explicit limitations.
 
+**Implemented (Phase 5, this repository):**
+
+- A local, sequential, offline scenario-suite runner (ISM v0.1 document
+  format, `internal/suite/`), executing every listed scenario via the
+  unchanged Phase 4 `internal/scenario.Run`
+- `incidentdna suite verify` / `run`, including `--workspace-root`,
+  `--report`, `--keep-workspaces`, and `--fail-fast`
+- Aggregate `PASS`/`FAIL` classification (a pure function of each listed
+  scenario's own five-outcome result) with a deterministic JSON aggregate
+  report (`--report`), embedding every executed scenario's own unmodified
+  `scenario.Report`
+- No directory-walk or glob-based scenario discovery, no parallel
+  execution, no coupling to the incident library, and three fixed resource
+  limits
+- A fifth, fully fictional `examples/regression-suite-demo/` example
+- See [`docs/scenario-suites.md`](docs/scenario-suites.md) for the full
+  design, the safety model, and its explicit limitations.
+
 **Future work (not started, not scoped, not implemented in this codebase):**
-ingestion from observability/event systems, integration into release gating,
-a suite/aggregation layer for running many scenarios at once, automatic
-cross-referencing of a scenario's `linked_fingerprint` against incident
-library occurrences, evidence/library signing or authenticity proof,
-remote/cloud storage for the evidence store, incident library, or
-scenarios, and any of the other items listed as explicitly out of scope in
+ingestion from observability/event systems, integration into release
+gating, automatic cross-referencing of a scenario's (or a suite's)
+`linked_fingerprint` against incident library occurrences, parallel suite
+execution, evidence/library signing or authenticity proof, remote/cloud
+storage for the evidence store, incident library, scenarios, or suites, and
+any of the other items listed as explicitly out of scope in
 [`docs/product-scope.md`](docs/product-scope.md). None of this exists yet;
 treat any description of it as forward-looking, not current capability.
 
