@@ -159,9 +159,70 @@ launches — see [`regression-scenarios.md`](regression-scenarios.md), "A
 new class of risk," for the full distinction between "bounded" and
 "sandboxed."
 
-## Explicitly out of scope for Phase 1 through Phase 4
+## Phase 5 scope
 
-This codebase, through the end of Phase 4, contains none of:
+Phase 5 builds directly on Phases 1 through 4, without changing any of
+them: a small, reviewable, versioned manifest format — a **scenario suite**
+(ISM v0.1, "Incident Scenario Manifest") — and a local, sequential, offline
+**runner** that executes every scenario a manifest explicitly lists, once
+each, via the unchanged Phase 4 runner (`internal/scenario.Run`), and
+aggregates the five-outcome classification each scenario already produces
+into one suite-level result. This closes the gap this document previously
+named as explicitly out of scope through Phase 4 — a regression-scenario
+**suite runner** — as a **local**, sequential, aggregation-only runner with
+no directory/glob discovery, no parallel execution, and no automatic
+coupling to the incident library; those remain future work (see
+"Explicitly out of scope for Phase 1 through Phase 5" below). Concretely:
+
+- A new, dedicated document format (`internal/suite`), loaded through its
+  own size-capped loader — deliberately not an extension of
+  `scenario.Document` and not decoded through `internal/scenario`, since a
+  suite manifest describes an ordered *list* of scenarios, not an
+  execution.
+- Two CLI subcommands: `incidentdna suite verify`, `run`.
+- A suite manifest lists scenario files explicitly, by declared relative
+  path — never a directory walk or glob — mirroring the same
+  "nothing is resolved implicitly, only what a reviewer can see in the
+  file" discipline `execution.workspace_files` already established in IRS
+  v0.1.
+- `suite run` executes every listed scenario exactly once, sequentially, in
+  declared order, by calling `internal/scenario.Run` unchanged — no new
+  process-execution primitive, no parallelism — and aggregates the
+  outcomes into one suite-level `PASS` (every listed scenario PASSed) or
+  `FAIL` (otherwise) result, a pure function of the per-scenario outcomes.
+- `--fail-fast` stops running further scenarios immediately after the first
+  non-`PASS` outcome, recording every scenario never reached as `SKIPPED`
+  rather than silently omitting it.
+- A machine-readable, deterministic JSON aggregate report (`--report`),
+  embedding each executed scenario's own unmodified `scenario.Report`,
+  alongside the human-readable stdout summary every other subcommand
+  already produces.
+- Three fixed resource limits (suite manifest document size, maximum
+  scenarios per suite, and a maximum aggregate suite timeout bound) and the
+  path-traversal/symlink protections `internal/evidence`, `internal/library`,
+  and `internal/scenario` already established, extended to declared
+  `scenarios[].path` entries.
+- A fifth, fully fictional example (`examples/regression-suite-demo/`)
+  demonstrating both aggregate outcomes end-to-end, entirely separate from
+  `examples/duplicate-payment/`, `examples/evidence-storage-demo/`,
+  `examples/incident-library-demo/`, and
+  `examples/regression-scenario-demo/`.
+
+Full design in [`scenario-suites.md`](scenario-suites.md). Phase 5 does not
+change `idir.Document`, the JSON Schema, `internal/validate`'s rules,
+`internal/canonical`, `internal/fingerprint`, `internal/compare`,
+`internal/evidence`, `internal/library`, or `internal/scenario` — the suite
+runner operates strictly on a new, separate manifest format and, for every
+listed scenario, the unchanged Phase 4 loading/validation/execution
+pipeline. Phase 5 introduces no new class of risk: `internal/suite` is the
+first package in this codebase that never calls `exec.Command` itself,
+directly or indirectly — every process a suite launches is launched by
+`internal/scenario.Run`, unchanged — see
+[`scenario-suites.md`](scenario-suites.md), "No new class of risk."
+
+## Explicitly out of scope for Phase 1 through Phase 5
+
+This codebase, through the end of Phase 5, contains none of:
 
 - React, FastAPI, or any web/API framework.
 - Kubernetes or any cloud infrastructure.
@@ -173,28 +234,33 @@ This codebase, through the end of Phase 4, contains none of:
 - Any changes to, or reuse of, the separate OmniFlow repository.
 - Release gating, release-gate integration, or CI/CD blocking of any kind —
   `incidentdna library check` is an offline lookup command, not a gate, and
-  `incidentdna scenario run`'s exit code/JSON report are available to be
-  consumed by something else but are not wired into any gate by this
-  codebase.
-- A regression-scenario **suite runner**: `incidentdna scenario run`
-  operates on exactly one scenario file per invocation; discovering,
-  aggregating, or parallelizing multiple scenarios is not built.
-- **Sandboxed** scenario execution: `incidentdna scenario run` bounds
+  `incidentdna scenario run`'s and `incidentdna suite run`'s exit code/JSON
+  report are available to be consumed by something else but are not wired
+  into any gate by this codebase.
+- **Directory-walk or glob-based scenario discovery**: `incidentdna suite`
+  lists scenarios explicitly, by declared relative path; `incidentdna`
+  itself never walks a directory tree looking for scenario files.
+- **Parallel suite execution**: scenarios in a suite run strictly
+  sequentially, in declared order — `incidentdna suite run` never runs two
+  scenarios concurrently.
+- **Sandboxed** scenario execution: `incidentdna scenario run` (called by
+  `incidentdna suite run` once per listed scenario, unchanged) bounds
   argv/env/cwd/timeout/output for the process it launches, but does not
   isolate it with seccomp, cgroups, a container, or a VM — the reviewed
   command runs with the full OS-level permissions of the invoking user.
-- Automatic coupling between a scenario's `linked_fingerprint` and the
-  incident library's stored occurrences — `internal/scenario` never
-  imports or queries `internal/library`.
+- Automatic coupling between a scenario's (or a suite's) `linked_fingerprint`
+  and the incident library's stored occurrences — neither
+  `internal/scenario` nor `internal/suite` imports or queries
+  `internal/library`.
 - Ingestion from observability/event systems — `library add` (like
   `evidence store` before it) takes a local file path given directly on the
   command line, never an ingested event; the same is true of `scenario
-  verify`/`run`, which take a scenario file path given directly on the
-  command line.
-- Remote/cloud storage for the evidence store, the incident library, or
-  regression scenarios.
+  verify`/`run` and `suite verify`/`run`, which take a scenario or suite
+  manifest file path given directly on the command line.
+- Remote/cloud storage for the evidence store, the incident library,
+  regression scenarios, or scenario suites.
 - Encryption at rest, for evidence, for library occurrences, for scenario
-  documents/reports, or for IDIR documents generally.
+  or suite documents/reports, or for IDIR documents generally.
 - Evidence or incident-library signing or authenticity proof.
 - Multi-tenancy, or any multi-tenant/shared-store access control, for
   either the evidence store or the incident library.
@@ -208,11 +274,13 @@ This codebase, through the end of Phase 4, contains none of:
 
 These are all real future needs (see [`phase-1-report.md`](phase-1-report.md),
 "Recommended Phase 2 scope", [`phase-2-plan.md`](phase-2-plan.md) §16,
-[`phase-3-plan.md`](phase-3-plan.md) §4, and [`phase-4-plan.md`](phase-4-plan.md)
-§3/§27/§28), but each phase's job is to get its own layer's guarantees right
-— Phase 1 the document representation, Phase 2 local evidence integrity,
-Phase 3 local occurrence storage and lookup, Phase 4 local, bounded,
-reviewed-command execution — before anything further is built on top.
+[`phase-3-plan.md`](phase-3-plan.md) §4, [`phase-4-plan.md`](phase-4-plan.md)
+§3/§27/§28, and [`phase-5-plan.md`](phase-5-plan.md) §3/§25/§26), but each
+phase's job is to get its own layer's guarantees right — Phase 1 the
+document representation, Phase 2 local evidence integrity, Phase 3 local
+occurrence storage and lookup, Phase 4 local, bounded, reviewed-command
+execution, Phase 5 local, sequential, aggregated execution of many already-
+reviewed scenarios — before anything further is built on top.
 
 ## Why this order
 

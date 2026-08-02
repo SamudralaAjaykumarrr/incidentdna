@@ -1,15 +1,19 @@
 # Threat Model
 
 Scope: the `incidentdna` CLI and the `internal/*` libraries it's built on,
-as they exist at the end of Phase 4 — local file input, local file/stdout
+as they exist at the end of Phase 5 — local file input, local file/stdout
 output, a local content-addressed evidence store, a local incident library,
-and a local, bounded, offline regression-scenario runner. No network, no
-multi-user or multi-tenant concerns. Phase 4 introduces one new class of
-risk this scope statement did not previously need to cover: local process
-execution (see "Executable regression scenarios: local process-execution
-risks (Phase 4)" below) — every prior phase's operations were pure
-data/filesystem transformations that never executed the content they
-processed.
+a local, bounded, offline regression-scenario runner, and a local,
+sequential, offline scenario-suite runner. No network, no multi-user or
+multi-tenant concerns. Phase 4 introduced one new class of risk this scope
+statement did not previously need to cover: local process execution (see
+"Executable regression scenarios: local process-execution risks (Phase 4)"
+below) — every prior phase's operations were pure data/filesystem
+transformations that never executed the content they processed. Phase 5
+introduces no further new class of risk: `internal/suite` never calls
+`exec.Command` itself; every process a suite launches is launched by the
+unchanged Phase 4 runner (see "Scenario suites: aggregated local
+process-execution risk (Phase 5)" below).
 
 ## Maliciously modified incident documents
 
@@ -316,6 +320,68 @@ process, not parsing/hashing a document. See
 [`regression-scenarios.md`](regression-scenarios.md), "Resource limits,"
 for the full detail.
 
+## Scenario suites: aggregated local process-execution risk (Phase 5)
+
+Phase 5 introduces no new category of risk beyond what this document
+already documents for Phase 4 above: every process a suite launches is
+launched by `internal/scenario.Run`, unchanged, so every one of that
+section's bullets (malicious/careless scenario authorship, workspace
+path-traversal, resource exhaustion, `command[0]` being a shell, TOCTOU,
+detached-process timeout evasion, no network/telemetry from the runner's
+own code) applies identically, per listed scenario, whether that scenario
+is run standalone via `scenario run` or as part of a suite via `suite run`.
+`internal/suite` is the first package in this codebase that never calls
+`exec.Command` at all, directly or indirectly through a new code path.
+
+The one genuinely new consideration:
+
+- **A malicious or careless suite manifest can name scenario files whose
+  content a reviewer of the manifest alone has not necessarily read.**
+  Mitigated the same way `--source` cross-checking is mitigated in Phase 4:
+  nothing about suite membership hides or mutates a scenario file's own
+  content — `suite verify` prints every listed scenario's path and its own
+  validation result, so a reviewer approving a suite manifest is explicitly
+  shown which scenario files it will run, in what order, before ever
+  running `suite run`. As with every other "review before running" control
+  in this project, IncidentDNA does not verify that a human actually read
+  each one — it makes doing so straightforward and the alternative (running
+  an unreviewed suite) an explicit, visible choice.
+- **Suite manifest path-traversal via `scenarios[].path`.** Mitigated
+  structurally, the identical `checkContained`-style pattern
+  `workspace_files` already established: each declared path is
+  `filepath.Clean`ed and re-checked to have the suite manifest's own
+  directory as a prefix before `scenario.LoadFile` is ever called on it;
+  a symlink at that path is rejected, not followed.
+- **A suite listing one invalid scenario does not silently skip it.**
+  `suite verify`/`suite run` reject the entire suite manifest — nothing
+  executes — if any one listed scenario fails `scenario.Validate`, so a
+  reviewer's approval of "this suite is valid" always means "every scenario
+  in it is valid," never "most of them are." See
+  [`scenario-suites.md`](scenario-suites.md), "Corruption and
+  malformed-manifest handling."
+
+## Scenario suite resource limits (Phase 5)
+
+Mirroring the evidence store's, incident library's, and regression
+scenario runner's existing precedent, three fixed constants in
+`internal/suite/limits.go` bound the suite runner's exposure to a
+maliciously or accidentally oversized suite manifest, an excessive number
+of listed scenarios, or an excessive aggregate declared timeout:
+`MaxSuiteDocumentSize` (256 KiB), `MaxScenariosPerSuite` (100), and
+`MaxSuiteTotalTimeoutSeconds` (1800 seconds/30 minutes, the sum of every
+listed scenario's declared/default `timeout_seconds`, checked at verify
+time before any scenario ever runs). Each is enforced independently and
+produces a distinct, actionable error naming the limit and the offending
+value. Every per-scenario limit from `internal/scenario/limits.go`
+(document size, workspace file count/size/aggregate size, output capture
+size, and timeout bounds) is inherited unchanged, per listed scenario.
+`suite verify` runs under the same 30-second overall command timeout every
+other subcommand already has; `suite run` deliberately does **not** — it
+uses its own context bounded by `MaxSuiteTotalTimeoutSeconds`, the same
+"categorically different workload" reasoning already stated for `scenario
+run`. See [`scenario-suites.md`](scenario-suites.md), "Resource limits,"
+for the full detail.
+
 ## Path traversal through CLI inputs
 
 `incidentdna validate/fingerprint/inspect` open exactly the file path(s)
@@ -349,6 +415,16 @@ once a reviewed scenario's declared command starts, what *it* reads or
 writes is bounded only by the invoking user's own OS-level permissions, not
 by `incidentdna` — this is the documented "bounded, not sandboxed" limit,
 not a path-traversal gap in the runner's own code.
+
+`incidentdna suite verify`/`run` similarly open exactly the suite manifest
+file path given directly on the command line. Every listed scenario's
+filesystem path is derived from a `scenarios[].path` entry's own declared
+value, re-checked to resolve within the suite manifest's own directory —
+see "Scenario suites: aggregated local process-execution risk (Phase 5)"
+above. Once `suite run` hands off to `scenario.Run` for one listed
+scenario, the same "bounded, not sandboxed" limit stated above applies
+identically — nothing about running from inside a suite changes what an
+already-reviewed scenario's own declared command can read or write.
 
 ## Resource exhaustion from maliciously large documents
 
@@ -392,19 +468,19 @@ exists and refuses to proceed (non-zero exit, no write) unless `--force` is
 passed — verified in `cmd/incidentdna/cli_test.go` and manually in
 `phase-1-report.md`. No other subcommand writes any file.
 
-## Future multi-tenant risks (explicitly out of scope through Phase 4)
+## Future multi-tenant risks (explicitly out of scope through Phase 5)
 
-Phase 3's incident library and Phase 4's regression-scenario runner are
-**local and single-user, not shared or multi-tenant** — the same trust
-boundary as the evidence store before them: no concept of a tenant, user
-account, or access-control layer of its own. Every invocation, including
-every `library`, `evidence`, and `scenario` subcommand, operates on files
-(and, for `library`/`evidence`, a store) the invoking user already has
-filesystem access to. Risks that become relevant only if a
-shared/remote/multi-tenant incident library, evidence store, or scenario
-execution service is built in a later phase — none of this exists today,
-and Phase 4 explicitly does not build it (see
-[`product-scope.md`](product-scope.md)):
+Phase 3's incident library, Phase 4's regression-scenario runner, and Phase
+5's scenario-suite runner are **local and single-user, not shared or
+multi-tenant** — the same trust boundary as the evidence store before them:
+no concept of a tenant, user account, or access-control layer of its own.
+Every invocation, including every `library`, `evidence`, `scenario`, and
+`suite` subcommand, operates on files (and, for `library`/`evidence`, a
+store) the invoking user already has filesystem access to. Risks that
+become relevant only if a shared/remote/multi-tenant incident library,
+evidence store, or scenario/suite execution service is built in a later
+phase — none of this exists today, and Phase 5 explicitly does not build it
+(see [`product-scope.md`](product-scope.md)):
 
 - Cross-tenant fingerprint/identity leakage (can one tenant infer another
   tenant's incident existed, from a shared fingerprint namespace?).
@@ -422,11 +498,11 @@ and Phase 4 explicitly does not build it (see
   [`incident-library.md`](incident-library.md) — appropriate for a single
   local user, not for a store shared across untrusted parties.
 - Any notion of a shared, remote, or multi-tenant *execution* service for
-  regression scenarios — `incidentdna scenario run` executes locally, once,
-  under the invoking user's own OS-level permissions; a hypothetical remote
-  runner would face an entirely different, much larger threat surface
-  (untrusted-command execution as a service) that this phase does not
-  attempt to address.
+  regression scenarios or scenario suites — `incidentdna scenario run` and
+  `incidentdna suite run` execute locally, sequentially, under the invoking
+  user's own OS-level permissions; a hypothetical remote runner would face
+  an entirely different, much larger threat surface (untrusted-command
+  execution as a service) that this phase does not attempt to address.
 
 None of these are mitigated today because none of the underlying
 capabilities (network service, multi-user storage, multiple callers) exist

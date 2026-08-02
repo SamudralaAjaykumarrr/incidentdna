@@ -12,11 +12,13 @@ internal/compare/       Fingerprint comparison + per-dimension diff
 internal/evidence/      Local content-addressed evidence store + digest verification
 internal/library/       Local incident library: occurrences grouped by fingerprint
 internal/scenario/      Local, bounded, offline regression-scenario runner (IRS v0.1)
+internal/suite/         Local, sequential, offline scenario suite runner (ISM v0.1)
 schemas/idir/v0.1/      Documentation-grade JSON Schema for the format
 examples/duplicate-payment/     Synthetic example used by tests and `make example`
 examples/evidence-storage-demo/ Separate synthetic example for `incidentdna evidence`
 examples/incident-library-demo/ Separate synthetic example for `incidentdna library`
 examples/regression-scenario-demo/ Separate synthetic example for `incidentdna scenario`
+examples/regression-suite-demo/ Separate synthetic example for `incidentdna suite`
 testdata/golden/        Golden fingerprint + one fixture per rejected validation case
 ```
 
@@ -43,6 +45,11 @@ fingerprint cross-check, reusing them unchanged — and is not imported by
 `idir`, `validate`, `canonical`, `fingerprint`, `compare`, `evidence`, or
 `library`; `scenario` is a fourth independent, parallel leaf concern that
 does not import `evidence` or `library` and is not imported by either.
+`internal/suite` imports only `internal/scenario` — `LoadFile`, `Validate`,
+and `Run`, all unchanged — and is not imported by `idir`, `validate`,
+`canonical`, `fingerprint`, `compare`, `evidence`, `library`, or `scenario`;
+`suite` is a fifth independent, parallel leaf concern, one level further
+from the shared primitives than `scenario` itself.
 
 ## Data flow
 
@@ -168,6 +175,52 @@ for the full design: the IRS v0.1 document format, the two `incidentdna
 scenario` subcommands, the safety model, execution isolation boundaries,
 resource limits, and path-traversal/symlink protections.
 
+## Scenario suites (Phase 5)
+
+`internal/suite` is a fifth parallel data flow, independent of
+`internal/evidence` and `internal/library` as well as the main pipeline. It
+is the first package in this codebase that never calls `exec.Command`
+itself, directly or indirectly through a new code path — every process a
+suite launches is launched by the unchanged Phase 4 `internal/scenario.Run`,
+once per listed scenario:
+
+```
+ISM v0.1 suite manifest (suite verify/run)
+   │  suite.LoadFile — size cap, format sniff, typed decode
+   ▼
+suite.Document
+   │  suite.Validate — schema_version, non-empty scenarios, path safety,
+   │  duplicate-path rejection, MaxScenariosPerSuite, aggregate timeout
+   │  bound — and, for every listed scenario it resolves to a real file,
+   │  scenario.LoadFile + scenario.Validate (unchanged)
+   ▼
+(valid) suite.Document, every listed scenario also valid
+   │  suite.Run — sequential, declared-order iteration
+   ▼
+   for each listed scenario:
+     scenario.LoadFile + scenario.Run (unchanged, one fresh workspace each)
+        ▼
+     PASS / FAIL / TIMEOUT / INVALID / INTERNAL_ERROR (per scenario, unchanged)
+   │
+   ▼
+aggregate PASS (every scenario PASSed) or FAIL (otherwise) — a pure function
+of the per-scenario outcomes
+   │  suite.BuildReport + suite.WriteReport (--report only)
+   ▼
+deterministic JSON aggregate report, embedding each executed scenario's own
+unmodified scenario.Report
+```
+
+A suite manifest *names* scenarios by declared, explicit path — no
+directory walk, no glob — the same "nothing is resolved implicitly, only
+what a reviewer can see in the file" discipline `execution.workspace_files`
+already established for a single scenario in Phase 4, extended here to a
+list of scenarios instead of one file's staged fixtures. See
+[`scenario-suites.md`](scenario-suites.md) for the full design: the ISM
+v0.1 manifest format, the two `incidentdna suite` subcommands, aggregate
+outcome classification, `--fail-fast`, resource limits, and
+path-traversal/symlink protections.
+
 ## CLI conventions
 
 - **Exit codes**: `0` success; `1` I/O, parse, or usage error; `2` semantic
@@ -186,6 +239,12 @@ resource limits, and path-traversal/symlink protections.
   child process it executes (up to `MaxScenarioTimeoutSeconds`) — `scenario
   verify`, which never executes anything, restores the usual 30s budget
   itself. See [`regression-scenarios.md`](regression-scenarios.md),
+  "Resource limits." `suite run` is the same kind of exception: `main.go`
+  special-cases the `suite` command identically, since `suite run` needs
+  its own budget for the (potentially many) bounded child-process
+  executions it performs in sequence, bounded by
+  `suite.MaxSuiteTotalTimeoutSeconds` — `suite verify` restores the usual
+  30s budget itself. See [`scenario-suites.md`](scenario-suites.md),
   "Resource limits."
 - **Never dereferences evidence locations.** `evidence[].location` is
   free-text metadata; the CLI never opens, fetches, or otherwise interprets
@@ -203,7 +262,10 @@ resource limits, and path-traversal/symlink protections.
   `workspace_files` entries, each re-checked to resolve within its
   respective root (the scenario file's own directory for `source`, the
   workspace root for `destination`) — see
-  [`regression-scenarios.md`](regression-scenarios.md).
+  [`regression-scenarios.md`](regression-scenarios.md). `suite verify`/`run`
+  derive every listed-scenario filesystem path from a suite manifest's own
+  declared `scenarios[].path` entries, each re-checked to resolve within the
+  manifest's own directory — see [`scenario-suites.md`](scenario-suites.md).
 
 ## Rejected alternatives
 
@@ -248,4 +310,11 @@ Phase 1 primitives (`idir`, `validate`, `fingerprint`) without any change to
 them — but it still does not build a release gate, a suite runner, or
 automatic coupling to `internal/library`; those remain future work. See
 [`regression-scenarios.md`](regression-scenarios.md), "What Phase 4
-explicitly does not provide."
+explicitly does not provide." `internal/suite` (Phase 5) closes the "suite
+runner" gap specifically, built entirely on the unchanged Phase 4
+`internal/scenario` package (`LoadFile`, `Validate`, `Run`) without any
+change to it — but it still does not build a release gate, directory/glob
+scenario discovery, parallel execution, or automatic coupling to
+`internal/library`; those remain future work. See
+[`scenario-suites.md`](scenario-suites.md), "What Phase 5 explicitly does
+not provide."

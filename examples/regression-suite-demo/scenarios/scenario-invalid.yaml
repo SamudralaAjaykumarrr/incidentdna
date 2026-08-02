@@ -1,0 +1,37 @@
+# IncidentDNA IRS v0.1 scenario document — synthetic example, part of the
+# Phase 5 regression-suite-demo.
+#
+# The INVALID outcome demonstration: command[0] is "echo", a bare command
+# name with no path separator, which would require an implicit,
+# host-dependent $PATH lookup to resolve — rejected at the pre-execution
+# check `scenario verify`/`scenario run` both perform, before anything is
+# ever executed.
+#
+# This file is deliberately never listed in suite-all-pass.yaml or
+# suite-mixed.yaml: per docs/phase-5-plan.md §17, a suite that lists even one
+# structurally invalid scenario is rejected as a whole at `suite verify`/
+# `suite run` pre-execution time (aggregate INVALID, nothing executes) — it
+# is not partially run, skipping only the invalid entry. See this example's
+# README, "Demonstrating aggregate INVALID", for how
+# scripts/verify-suite-demo.sh exercises this file on its own, in a
+# throwaway suite manifest generated at verification time.
+schema_version: irs/v0.1
+
+scenario:
+  id: suite-demo-invalid
+  title: Bare command name, to demonstrate a suite-level INVALID rejection
+  description: >
+    Declares execution.command[0] as a bare command name ("echo") instead of
+    an absolute path or a path relative to the workspace root, which is
+    rejected before any process is ever started — and which makes any suite
+    listing this file, as a whole, fail suite verify/run.
+
+linked_fingerprint: "sha256:fc3dac016d31dcca1a58c0242c45474107dd69c1e7718d9cdebdbe357bca2a8e"
+
+execution:
+  command:
+    - "echo"
+    - "this never runs"
+
+expected:
+  exit_code: 0

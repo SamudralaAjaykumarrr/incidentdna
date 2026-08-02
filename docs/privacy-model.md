@@ -163,27 +163,63 @@ evidence store and incident library, persists nothing durable by default:
   is explicitly given, in which case its path is printed/reported for
   manual inspection and cleanup.
 
-## What Phase 1 through Phase 4 do not do
+## Scenario suite privacy implications (Phase 5)
+
+Phase 5 adds a local, sequential, offline scenario-suite runner (see
+[`scenario-suites.md`](scenario-suites.md)) that, like the Phase 4
+regression-scenario runner, persists nothing durable by default:
+
+- **Suite manifests carry no dedicated privacy/redaction block** — no
+  `privacy.redacted` equivalent, for the identical reason a scenario
+  document carries none: a suite manifest is short-lived, reviewable
+  execution metadata (an ordered list of scenario references), not a
+  permanent incident record.
+- **The aggregate JSON report's embedded per-scenario reports are exactly
+  as bounded as a standalone scenario report already is** —
+  `MaxScenarioOutputBytes` per stream, per scenario, unchanged. Nothing
+  scans a suite manifest, an aggregate report, or any embedded scenario
+  report for sensitive content before writing it — the same "no PII
+  detection over captured content" stance already stated above.
+- **No network access means no telemetry, no external transmission of
+  suite or scenario content, ever** — restating the unconditional project
+  invariant, extended to `internal/suite`.
+- **The executed scenarios' own privacy behavior is entirely outside this
+  tool's control**, identically to a standalone `scenario run` — running a
+  scenario from inside a suite changes nothing about what that scenario's
+  own declared command reads or writes.
+- **`suite run`'s only durable output is a caller-named `--report` file** —
+  there is no default store, no `.incidentdna/suite/...` root, and no
+  accumulation of suite execution history anywhere. Every scenario's own
+  workspace (staged fixtures and whatever the reviewed command wrote) is
+  removed after the suite run completes unless `--keep-workspaces` is
+  explicitly given, in which case each scenario's workspace path is
+  printed/reported for manual inspection and cleanup, exactly as
+  `--keep-workspace` already behaves for a standalone `scenario run`.
+
+## What Phase 1 through Phase 5 do not do
 
 - No automatic redaction — nothing in this codebase removes or masks
   sensitive content; validation only checks that an author's manual
   redaction was complete against the known-location list.
 - No PII detection across the whole document, or across stored evidence
-  file content, stored library occurrences, or scenario execution
+  file content, stored library occurrences, or scenario/suite execution
   output/reports — only the specific document fields listed above.
 - No encryption at rest or in transit — for IDIR documents, stored evidence
-  bytes, stored library occurrences, or scenario documents/workspaces/reports.
+  bytes, stored library occurrences, or scenario/suite documents/workspaces/
+  reports.
 - No data retention or deletion policy — for IDIR documents, the evidence
-  store, or the incident library. (Scenario workspaces are removed by
-  default after each run, as stated above — a different, narrower behavior
-  than "no retention policy," since there is nothing durable to retain in
-  the first place unless `--keep-workspace`/`--report` is explicitly used.)
+  store, or the incident library. (Scenario and suite workspaces are
+  removed by default after each run, as stated above — a different,
+  narrower behavior than "no retention policy," since there is nothing
+  durable to retain in the first place unless
+  `--keep-workspace`/`--keep-workspaces`/`--report` is explicitly used.)
 - No signing or authenticity proof for a library occurrence — its presence
   in the library, and a passing integrity check, prove internal
   self-consistency only, never that the incident is truthful or who added
   it (see [`incident-library.md`](incident-library.md), "Integrity versus
   authenticity"). The incident library is not an authorization or trust
-  system. The regression-scenario runner makes no trust claim at all about
-  the command it executes — see
-  [`regression-scenarios.md`](regression-scenarios.md), "A new class of
+  system. Neither the regression-scenario runner nor the scenario-suite
+  runner makes any trust claim at all about the command(s) it executes —
+  see [`regression-scenarios.md`](regression-scenarios.md), "A new class of
+  risk," and [`scenario-suites.md`](scenario-suites.md), "No new class of
   risk."

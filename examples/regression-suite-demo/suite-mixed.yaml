@@ -1,0 +1,23 @@
+# IncidentDNA ISM v0.1 suite manifest — synthetic example.
+#
+# A mix of PASS, FAIL, and TIMEOUT scenario outcomes — every listed scenario
+# is itself structurally valid (so this suite passes `suite verify` and
+# `suite run` executes every entry), but not every one PASSes, so `suite
+# run` reports the aggregate FAIL outcome and exits 2. Also used to
+# demonstrate --fail-fast: with that flag, scenarios/scenario-timeout.yaml
+# is never reached (recorded SKIPPED) because scenarios/scenario-fail.yaml,
+# earlier in this list, already produced a non-PASS outcome.
+schema_version: suite/v0.1
+
+suite:
+  id: suite-demo-mixed
+  title: A mix of PASS, FAIL, and TIMEOUT scenario outcomes
+  description: >
+    Demonstrates the aggregate FAIL outcome: at least one listed scenario
+    does not PASS, so `suite run` exits 2, while every other listed
+    scenario still runs unless --fail-fast is given.
+
+scenarios:
+  - path: scenarios/scenario-pass.yaml
+  - path: scenarios/scenario-fail.yaml
+  - path: scenarios/scenario-timeout.yaml

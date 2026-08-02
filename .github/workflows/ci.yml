@@ -35,5 +35,8 @@ jobs:
       - name: Regression scenario demo validation
         run: make example-scenario
 
+      - name: Regression suite demo validation
+        run: make example-suite
+
       - name: Golden fingerprint verification
         run: docker compose run --rm --remove-orphans dev sh scripts/verify-golden-fingerprint.sh
