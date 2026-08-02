@@ -1,0 +1,51 @@
+# IncidentDNA IRS v0.1 scenario document — synthetic example.
+#
+# Re-validates and re-fingerprints a frozen copy of the duplicate-payment
+# example's content through the compiled incidentdna binary, and asserts the
+# result exactly matches the pinned golden fingerprint
+# (testdata/golden/duplicate-payment.fingerprint). This is the PASS outcome
+# demonstration: the command exits 0 and its stdout contains the expected
+# fingerprint.
+#
+# command[0] below is a placeholder, "/INCIDENTDNA_BIN_PLACEHOLDER" — a
+# syntactically absolute path (so `scenario verify` accepts its shape) that
+# does not exist on any real filesystem. scripts/verify-scenario-demo.sh
+# substitutes it for the real, checkout-specific absolute path to the built
+# ./bin/incidentdna binary before `scenario run` — see that script and
+# docs/regression-scenarios.md, "Why this demo uses an absolute command
+# path", for why: a genuinely portable *relative* command[0] pointing back
+# out of the workspace would need to know the workspace's depth below the
+# repository root, which varies by checkout and by the OS temporary
+# directory in use, so it cannot be a fixed, checked-in constant.
+# `incidentdna scenario verify` (structural validation, and the --source
+# fingerprint cross-check) runs against this file completely unmodified —
+# only `incidentdna scenario run` needs the substituted copy.
+schema_version: irs/v0.1
+
+scenario:
+  id: duplicate-payment-refingerprint
+  title: Duplicate payment example still fingerprints and validates cleanly
+  description: >
+    Re-validates and re-fingerprints a frozen copy of the duplicate-payment
+    example's content through the compiled incidentdna binary, and asserts
+    the result exactly matches the pinned golden fingerprint.
+
+linked_fingerprint: "sha256:fc3dac016d31dcca1a58c0242c45474107dd69c1e7718d9cdebdbe357bca2a8e"
+
+execution:
+  workspace_files:
+    - source: fixtures/incident.yaml
+      destination: incident.yaml
+  command:
+    - "/INCIDENTDNA_BIN_PLACEHOLDER"
+    - "fingerprint"
+    - "incident.yaml"
+  env:
+    LC_ALL: "C"
+  timeout_seconds: 10
+
+expected:
+  exit_code: 0
+  stdout:
+    mode: contains
+    value: "sha256:fc3dac016d31dcca1a58c0242c45474107dd69c1e7718d9cdebdbe357bca2a8e"

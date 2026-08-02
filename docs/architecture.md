@@ -11,30 +11,38 @@ internal/fingerprint/   Identity-payload extraction -> canonical -> sha256
 internal/compare/       Fingerprint comparison + per-dimension diff
 internal/evidence/      Local content-addressed evidence store + digest verification
 internal/library/       Local incident library: occurrences grouped by fingerprint
+internal/scenario/      Local, bounded, offline regression-scenario runner (IRS v0.1)
 schemas/idir/v0.1/      Documentation-grade JSON Schema for the format
 examples/duplicate-payment/     Synthetic example used by tests and `make example`
 examples/evidence-storage-demo/ Separate synthetic example for `incidentdna evidence`
 examples/incident-library-demo/ Separate synthetic example for `incidentdna library`
+examples/regression-scenario-demo/ Separate synthetic example for `incidentdna scenario`
 testdata/golden/        Golden fingerprint + one fixture per rejected validation case
 ```
 
 Dependency direction is strictly one-way:
-`idir` ← `validate`, `fingerprint`, `evidence`, `library`; `canonical` ←
-`fingerprint`, `library`; `fingerprint` ← `compare`, `library`; all of the
-above ← `cmd/incidentdna`. Nothing in `internal/` imports `cmd/incidentdna`,
-and nothing in `internal/idir` imports any other internal package — it is
-the shared vocabulary everything else builds on. `internal/evidence` imports
-`internal/idir` the same way `fingerprint` and `compare` already do (to read
-`doc.Evidence` entries); it does not import, and is not imported by,
-`validate`, `canonical`, `fingerprint`, or `compare` — evidence storage is a
-parallel concern, not a dependency of the document-representation/
-fingerprinting pipeline. `internal/library` imports `internal/idir`,
-`internal/fingerprint`, and `internal/canonical` — reusing
+`idir` ← `validate`, `fingerprint`, `evidence`, `library`, `scenario`;
+`canonical` ← `fingerprint`, `library`; `fingerprint` ← `compare`, `library`,
+`scenario`; `validate` ← `scenario` (in addition to `cmd/incidentdna`); all
+of the above ← `cmd/incidentdna`. Nothing in `internal/` imports
+`cmd/incidentdna`, and nothing in `internal/idir` imports any other internal
+package — it is the shared vocabulary everything else builds on.
+`internal/evidence` imports `internal/idir` the same way `fingerprint` and
+`compare` already do (to read `doc.Evidence` entries); it does not import,
+and is not imported by, `validate`, `canonical`, `fingerprint`, or `compare`
+— evidence storage is a parallel concern, not a dependency of the
+document-representation/fingerprinting pipeline. `internal/library` imports
+`internal/idir`, `internal/fingerprint`, and `internal/canonical` — reusing
 `fingerprint.Compute` unchanged for identity and `canonical.Marshal` for an
 occurrence's own stored bytes and digest — and is not imported by `idir`,
 `validate`, `canonical`, `fingerprint`, `compare`, or `evidence`; `library`
 and `evidence` remain independent, parallel concerns that do not import each
-other.
+other. `internal/scenario` imports `internal/idir`, `internal/validate`, and
+`internal/fingerprint` — the three needed for the optional `--source`
+fingerprint cross-check, reusing them unchanged — and is not imported by
+`idir`, `validate`, `canonical`, `fingerprint`, `compare`, `evidence`, or
+`library`; `scenario` is a fourth independent, parallel leaf concern that
+does not import `evidence` or `library` and is not imported by either.
 
 ## Data flow
 
@@ -116,6 +124,50 @@ design: store layout, the three `incidentdna library` subcommands, the
 occurrence-decision semantics, resource limits, the privacy gate, and
 path-traversal/symlink protections.
 
+## Executable regression scenarios (Phase 4)
+
+`internal/scenario` is a fourth parallel data flow, independent of
+`internal/evidence` and `internal/library` as well as the main pipeline. It
+is the first package in this codebase to perform local process execution —
+a categorically new class of risk (see `docs/regression-scenarios.md`, "A
+new class of risk") — so its data flow includes a step none of the earlier
+packages have: launching and bounding a child process, rather than only
+reading, hashing, or storing bytes.
+
+```
+IRS v0.1 scenario document (scenario verify/run)     linked_fingerprint (declared in the document)
+   │  scenario.LoadFile — size cap, format sniff, typed decode
+   ▼
+scenario.Document
+   │  scenario.Validate — semantic rules (schema, command shape,
+   │  workspace_files safety, timeout bounds, expected shape)
+   ▼
+(valid) scenario.Document ──▶ scenario.CheckSourceFingerprint (--source only)
+   │  scenario.Run                  │  idir.LoadFile + validate.Validate +
+   │  (verify re-run internally,    │  fingerprint.Compute (unchanged)
+   │   then workspace + exec)       ▼
+   ▼                          match/mismatch against linked_fingerprint
+bounded workspace (os.MkdirTemp or
+ --workspace) + exec.Command,
+ no shell, own process group
+   │  timeout-bounded, output-capped
+   ▼
+PASS / FAIL / TIMEOUT / INVALID / INTERNAL_ERROR
+   │  scenario.BuildReport + scenario.WriteReport (--report only)
+   ▼
+deterministic JSON execution report
+```
+
+A scenario's `linked_fingerprint` is a declared claim, format-checked
+always and cross-checked against a fingerprint freshly computed from a
+named `--source` incident file only when given — never looked up against
+`internal/library`'s stored occurrences, keeping `internal/scenario` a true
+parallel leaf package and keeping a scenario runnable in a checkout that has
+never run `library add`. See [`docs/regression-scenarios.md`](regression-scenarios.md)
+for the full design: the IRS v0.1 document format, the two `incidentdna
+scenario` subcommands, the safety model, execution isolation boundaries,
+resource limits, and path-traversal/symlink protections.
+
 ## CLI conventions
 
 - **Exit codes**: `0` success; `1` I/O, parse, or usage error; `2` semantic
@@ -128,6 +180,13 @@ path-traversal/symlink protections.
   30s overall timeout into the `context.Context` passed to every subcommand;
   `internal/validate`'s loops check `ctx.Err()` periodically so a bounded
   timeout actually has an effect on a large document, not just on I/O.
+  `scenario run` is the one deliberate exception: `main.go` special-cases
+  the `scenario` command to skip that fixed 30s wrapping, since `scenario
+  run` needs its own, larger, document-declared timeout budget for the
+  child process it executes (up to `MaxScenarioTimeoutSeconds`) — `scenario
+  verify`, which never executes anything, restores the usual 30s budget
+  itself. See [`regression-scenarios.md`](regression-scenarios.md),
+  "Resource limits."
 - **Never dereferences evidence locations.** `evidence[].location` is
   free-text metadata; the CLI never opens, fetches, or otherwise interprets
   it. This is a deliberate scope boundary, not an oversight — see
@@ -139,7 +198,12 @@ path-traversal/symlink protections.
   incident library follows the identical rule: `library add`/`check`/`list`
   derive every filesystem path from a validated fingerprint or occurrence
   digest, never from `incident.id` or any other document-supplied value —
-  see [`incident-library.md`](incident-library.md).
+  see [`incident-library.md`](incident-library.md). `scenario verify`/`run`
+  derive every workspace filesystem path from a scenario's own declared
+  `workspace_files` entries, each re-checked to resolve within its
+  respective root (the scenario file's own directory for `source`, the
+  workspace root for `destination`) — see
+  [`regression-scenarios.md`](regression-scenarios.md).
 
 ## Rejected alternatives
 
@@ -177,5 +241,11 @@ revisit the core representation. `internal/library` (Phase 3) is itself an
 example of this: it is a new local store built entirely on Phase 1/2
 primitives (`idir`, `fingerprint`, `canonical`) without any change to them,
 and it still does not build a release gate, executable regression scenarios,
-remote/shared storage, or a signing/authenticity layer — those remain future
-work.
+remote/shared storage, or a signing/authenticity layer — those remained
+future work at the time. `internal/scenario` (Phase 4) closes the
+"executable regression scenarios" gap specifically, again built entirely on
+Phase 1 primitives (`idir`, `validate`, `fingerprint`) without any change to
+them — but it still does not build a release gate, a suite runner, or
+automatic coupling to `internal/library`; those remain future work. See
+[`regression-scenarios.md`](regression-scenarios.md), "What Phase 4
+explicitly does not provide."
