@@ -81,14 +81,67 @@ That store has no privacy controls of its own:
 - **No data retention or deletion policy for stored evidence** — consistent
   with the document-level statement below, extended to the store.
 
-## What Phase 1 and Phase 2 do not do
+## Incident library privacy policy (Phase 3)
+
+Phase 3 adds a local incident library (see
+[`incident-library.md`](incident-library.md)) that persists a full,
+validated document indefinitely rather than processing it transiently —
+the first place in this codebase to do so. Because of that, `incidentdna
+library add` applies a **stricter default** than any other Phase 1/2/3
+operation:
+
+- **`privacy.redacted == true` is required by default.** A document that
+  does not declare `redacted: true` is refused by `library add` unless the
+  caller explicitly passes `--allow-unredacted`.
+- **`--allow-unredacted` is an explicit, visible override, never a silent
+  bypass.** When used to store a document that does not declare
+  `redacted: true`, it always emits a warning on stderr:
+  `warning: --allow-unredacted override was used: this document does not
+  declare privacy.redacted == true; it was stored anyway`. The warning
+  never includes any part of the document's content, and is emitted only
+  when the override actually changed the outcome (i.e. never when the
+  document already declared `redacted: true`).
+- **`privacy.redacted` remains author-declared, not verified**, exactly as
+  it is everywhere else in this codebase (see "Redaction status and 'known
+  sensitive locations'" above). Storing a document in the library, with or
+  without `--allow-unredacted`, does not run any additional PII scan beyond
+  the same `internal/validate.checkRedaction` rule (known-sensitive-location
+  check plus the backstop regex) every other command already applies before
+  the library ever sees the document. The library trusts that same
+  assertion; it does not independently confirm the document was actually
+  reviewed or sanitized.
+- **`library check` and `library list` never print raw document contents.**
+  Their output is limited to a bounded field set (fingerprint, occurrence
+  count, incident id, title, application/service, occurred timestamp) —
+  never business invariants, event timelines, evidence contents, full
+  remediation text, or the complete identity payload. There is no
+  `--verbose` flag and no JSON output mode in Phase 3.
+- **Stored occurrences are not encrypted at rest**, and are not scanned for
+  PII beyond the same validation rule already enforced before storage —
+  consistent with the stance already stated above for stored evidence.
+  Anyone with filesystem read access to the library root can read a stored
+  occurrence's canonical JSON directly.
+- **No data retention or deletion policy for library occurrences** —
+  consistent with the document- and evidence-level statements elsewhere in
+  this document; an incident library is, by the product's own premise,
+  meant to be a permanent record, so there is no "remove"/expire capability
+  in Phase 3.
+
+## What Phase 1, Phase 2, and Phase 3 do not do
 
 - No automatic redaction — nothing in this codebase removes or masks
   sensitive content; validation only checks that an author's manual
   redaction was complete against the known-location list.
 - No PII detection across the whole document, or across stored evidence
-  file content — only the specific document fields listed above.
-- No encryption at rest or in transit — for either IDIR documents or stored
-  evidence bytes.
-- No data retention or deletion policy — for either IDIR documents or the
-  evidence store.
+  file content, or across stored library occurrences — only the specific
+  document fields listed above.
+- No encryption at rest or in transit — for IDIR documents, stored evidence
+  bytes, or stored library occurrences.
+- No data retention or deletion policy — for IDIR documents, the evidence
+  store, or the incident library.
+- No signing or authenticity proof for a library occurrence — its presence
+  in the library, and a passing integrity check, prove internal
+  self-consistency only, never that the incident is truthful or who added
+  it (see [`incident-library.md`](incident-library.md), "Integrity versus
+  authenticity"). The incident library is not an authorization or trust
+  system.

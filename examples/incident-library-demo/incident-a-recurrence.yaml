@@ -1,0 +1,130 @@
+# IncidentDNA IDIR document — synthetic example for the Phase 3 incident
+# library demo.
+#
+# A second, independently-authored recurrence of the SAME underlying failure
+# class as incident-a.yaml (connection pool exhaustion causing a request
+# retry storm), reported against a different service instance. The fields
+# that make up the fingerprint's identity payload — trigger (type,
+# description, preconditions), event types and their caused_by structure,
+# business invariant statements, side effect types, expected corrected
+# behavior, and service technology categories — are held identical to
+# incident-a.yaml on purpose, so `incidentdna fingerprint` (and therefore
+# `incidentdna library add`) recognizes this as the same failure class, even
+# though the incident id, title, summary, timestamps, application identity,
+# event ids/descriptions, and service names all differ. See
+# docs/fingerprint-design.md for exactly what is and isn't included.
+#
+# All identifiers below are fictional. No real credentials, customer data,
+# or production evidence are contained in this file.
+schema_version: "0.1"
+
+incident:
+  id: INC-2026-0618
+  title: checkout-service-eu unresponsive during connection pool saturation
+  summary: >
+    checkout-service-eu became unresponsive after a slow query held a
+    database connection past its expected duration, saturating the
+    connection pool. Requests queued indefinitely and retrying clients
+    amplified load on the already-saturated pool.
+  occurred_at: "2026-06-18T03:07:41Z"
+  detected_at: "2026-06-18T03:12:02Z"
+  resolved_at: "2026-06-18T04:05:00Z"
+
+application:
+  name: orbitcart
+  service: checkout-service-eu
+  environment: production
+  release_version: "3.6.1"
+  commit_ref: 1d3f5a7c9e1b3d5f7a9c1e3b5d7f9a1c3e5b7d9f
+
+trigger:
+  type: connection-pool-exhaustion
+  description: >
+    checkout-service's database connection pool reached its configured
+    maximum size and began queuing new connection requests indefinitely.
+  preconditions:
+    - fixed-size connection pool with no acquisition timeout
+    - a slow query can hold a connection far longer than the typical case
+
+events:
+  - id: evt-eu-slow-query
+    type: slow-query-detected
+    description: >
+      A reporting query against the EU replica of checkout-db begins holding
+      its connection well past normal duration.
+  - id: evt-eu-pool-saturated
+    type: connection-pool-saturated
+    description: >
+      The EU instance's connection pool reaches its configured maximum size
+      under normal daytime traffic.
+    caused_by:
+      - evt-eu-slow-query
+  - id: evt-eu-requests-queued
+    type: request-queued-indefinitely
+    description: >
+      New requests queue for a connection with no acquisition timeout on the
+      EU instance.
+    caused_by:
+      - evt-eu-pool-saturated
+  - id: evt-eu-retry-storm
+    type: client-retry-storm
+    description: >
+      Mobile clients in the EU region time out and begin retrying, further
+      loading the saturated pool.
+    caused_by:
+      - evt-eu-requests-queued
+
+services:
+  - name: checkout-service-eu
+    role: request-handler
+    technology_category: web-service
+  - name: checkout-db-eu-replica
+    role: local-state-store
+    technology_category: relational-database
+
+side_effects:
+  - type: request_timeout_cascade
+    description: >
+      Widespread request timeouts for EU mobile clients as queued requests
+      exceeded their client-side deadlines.
+    affected_entity: checkout-service-eu
+    reversible: true
+
+business_invariants:
+  - id: inv-bounded-request-latency
+    statement: >
+      A request must either complete or fail within a bounded time; it must
+      never queue indefinitely.
+
+expected_corrected_behavior:
+  - >
+    Connection acquisition from the pool must have a bounded timeout, and a
+    request that cannot acquire a connection within that timeout must fail
+    fast rather than queue indefinitely.
+  - >
+    Client retries must use bounded exponential backoff with jitter so a
+    saturated dependency is not amplified by a retry storm.
+
+evidence: []
+
+reproduction_sequence:
+  - step: 1
+    description: >
+      Issue a reporting query against the EU checkout-db replica that holds
+      its connection well past normal duration.
+    ref_event_id: evt-eu-slow-query
+  - step: 2
+    description: >
+      Generate enough concurrent EU request volume to saturate the remaining
+      pool capacity.
+    ref_event_id: evt-eu-pool-saturated
+  - step: 3
+    description: Observe EU requests queuing with no bound and mobile clients retrying.
+    ref_event_id: evt-eu-retry-storm
+
+privacy:
+  sensitivity: internal
+  redacted: true
+  notes: >
+    Contains only synthetic identifiers and a fictional scenario; no real
+    customer, payment, or credential data is present.

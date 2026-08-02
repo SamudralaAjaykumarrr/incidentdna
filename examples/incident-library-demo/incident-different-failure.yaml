@@ -1,0 +1,115 @@
+# IncidentDNA IDIR document — synthetic example for the Phase 3 incident
+# library demo.
+#
+# A materially different failure class from incident-a.yaml /
+# incident-a-recurrence.yaml (a cache stampede, not a connection pool
+# exhaustion) — used to demonstrate `incidentdna library check` reporting no
+# match (exit code 2) when the library holds only the pool-exhaustion
+# failure class. This document is never `library add`ed in the demo script;
+# it exists purely as a check-miss example.
+#
+# All identifiers below are fictional. No real credentials, customer data,
+# or production evidence are contained in this file.
+schema_version: "0.1"
+
+incident:
+  id: INC-2026-0722
+  title: Catalog page cache stampede overloads catalog-db
+  summary: >
+    A shared cache key for a highly-requested product page expired, and a
+    large number of concurrent requests missed the cache at the same
+    instant, each recomputing the same expensive query directly against
+    catalog-db.
+  occurred_at: "2026-07-22T11:03:15Z"
+  detected_at: "2026-07-22T11:04:02Z"
+  resolved_at: "2026-07-22T11:40:00Z"
+
+application:
+  name: orbitcart
+  service: catalog-service
+  environment: production
+  release_version: "2.9.3"
+  commit_ref: 9f1e3d5c7b9a1f3d5c7e9b1a3d5f7c9e1b3d5a7f
+
+trigger:
+  type: cache-stampede
+  description: >
+    A shared cache key for a high-traffic product page expired, and many
+    concurrent requests missed the cache at once, each independently
+    recomputing the same expensive query against the database.
+  preconditions:
+    - no request coalescing or lock around cache repopulation
+    - a single shared TTL with no jitter across keys
+
+events:
+  - id: evt-cache-key-expired
+    type: cache-key-expired
+    description: The shared cache key for the product page reaches its TTL and expires.
+  - id: evt-concurrent-miss
+    type: concurrent-cache-miss
+    description: >
+      A burst of concurrent requests for the same product page all miss the
+      cache within the same short window.
+    caused_by:
+      - evt-cache-key-expired
+  - id: evt-db-overload
+    type: database-overload
+    description: >
+      Each missed request independently issues the same expensive query
+      against catalog-db, overloading it.
+    caused_by:
+      - evt-concurrent-miss
+
+services:
+  - name: catalog-service
+    role: request-handler
+    technology_category: web-service
+  - name: catalog-cache
+    role: cache
+    technology_category: in-memory-cache
+  - name: catalog-db
+    role: local-state-store
+    technology_category: relational-database
+
+side_effects:
+  - type: database_overload
+    description: >
+      catalog-db's query latency spikes sharply as many identical, expensive
+      queries arrive concurrently, degrading unrelated catalog reads.
+    affected_entity: catalog-db
+    reversible: true
+
+business_invariants:
+  - id: inv-bounded-db-recompute
+    statement: >
+      A single cache-key expiration must never cause more than one
+      concurrent recomputation against the database for that key.
+
+expected_corrected_behavior:
+  - >
+    Cache repopulation must be coalesced so only one request recomputes a
+    given key while concurrent requests for the same key wait for that
+    result.
+  - >
+    Cache TTLs must be jittered so a large number of keys cannot expire at
+    the same instant.
+
+evidence: []
+
+reproduction_sequence:
+  - step: 1
+    description: Let a heavily-requested product page's cache key expire.
+    ref_event_id: evt-cache-key-expired
+  - step: 2
+    description: Send a burst of concurrent requests for that same page.
+    ref_event_id: evt-concurrent-miss
+  - step: 3
+    description: Observe catalog-db receive many identical concurrent queries.
+    ref_event_id: evt-db-overload
+
+privacy:
+  sensitivity: internal
+  redacted: true
+  notes: >
+    Contains only synthetic identifiers and a fictional scenario; no real
+    customer, payment, or credential data is present.

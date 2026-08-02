@@ -1,9 +1,9 @@
 # Threat Model
 
 Scope: the `incidentdna` CLI and the `internal/*` libraries it's built on,
-as they exist at the end of Phase 2 — local file input, local file/stdout
-output plus a local content-addressed evidence store, no network, no
-multi-user or multi-tenant concerns yet.
+as they exist at the end of Phase 3 — local file input, local file/stdout
+output plus a local content-addressed evidence store and a local incident
+library, no network, no multi-user or multi-tenant concerns yet.
 
 ## Maliciously modified incident documents
 
@@ -133,6 +133,89 @@ command timeout every other subcommand already has. See
 [`evidence-storage.md`](evidence-storage.md), "Resource limits," for the
 full detail.
 
+## Incident library: local filesystem risks (Phase 3)
+
+The incident library (`internal/library`) is local file I/O under the same
+trust boundary as the rest of the CLI and the evidence store: no elevation,
+no service, no multi-tenant concept. It extends the evidence store's
+already-reviewed defenses to a two-level (fingerprint, occurrence-digest)
+key space:
+
+- **Path traversal via a stored occurrence's location.** Structurally
+  prevented, not just defended against: the only values ever turned into a
+  library filesystem path are a fingerprint (validated to be exactly
+  `sha256:` + 64 lowercase hex characters, the same format
+  `internal/fingerprint.Compute` already produces) and an occurrence's
+  canonical-bytes digest (64 lowercase hex characters) — neither alphabet
+  can produce `..`, `/`, or a null byte. `Store.checkContained` additionally
+  re-checks every derived path against the resolved library root before any
+  file operation. `incident.id` is never used as, or concatenated into, a
+  filesystem path — it appears only as a value inside stored JSON content
+  (`index.json`, the occurrence body).
+- **Symlink abuse.** Every read path rejects an unexpected shard or
+  fingerprint directory (wrong length, not lowercase hex, or a symlink) as
+  malformed rather than following it; an occurrence file that is a symlink
+  or non-regular file is rejected as corrupted rather than trusted or
+  followed.
+- **Concurrent writes / partial reads.** `library add` writes a new
+  occurrence's canonical bytes to a temporary file under the library root,
+  `Sync()`s it, and `os.Rename`s it into place, atomic on the same
+  filesystem — a concurrent reader sees either no occurrence or the
+  complete occurrence, never a partial write. As with the evidence store,
+  this is not backed by any OS-level file lock; `index.json`'s
+  read-modify-write specifically is not lock-protected, so two concurrent
+  `add` calls racing to append to the *same* fingerprint's index could, in
+  principle, lose one of the two updates — a known, accepted gap consistent
+  with this project's single-local-user threat model, not a claim of safety
+  under concurrent multi-process writes. See
+  [`incident-library.md`](incident-library.md), "Filesystem and TOCTOU
+  limitations," for the full detail.
+- **Library root confusion.** The `--library` value (or the default
+  `.incidentdna/library/objects`) is resolved to an absolute,
+  symlink-resolved path exactly once per invocation, at the start of the
+  command (`library.Open`), the same discipline the evidence store's
+  `--store` flag already follows.
+- **Occurrence conflicts and corruption are not silently resolved.** A
+  same-`incident.id` document with materially different canonical bytes
+  under an existing fingerprint is refused as a conflict; an occurrence that
+  fails to re-hash to its own declared digest is reported as corrupted.
+  Neither case is ever repaired or overwritten automatically as a side
+  effect of an unrelated `add`/`check`/`list` call.
+- **Resource exhaustion via the library.** See "Incident library resource
+  limits (Phase 3)" below.
+
+**Integrity, not authenticity.** As with evidence digest verification above,
+a library occurrence's integrity check (`check`/`list` re-hashing stored
+bytes against the digest `index.json` recorded) proves internal
+self-consistency, not that the incident is truthful, or who added it, or
+when. The library's privacy gate (`privacy.redacted == true` required by
+`add` unless `--allow-unredacted` is given) is likewise author-declared, not
+independently verified — setting it does not itself prove the document was
+actually reviewed or sanitized. The incident library is not an
+authorization or trust system: it has no user accounts, no access control,
+and no concept of an incident being "approved." See
+[`incident-library.md`](incident-library.md), "Integrity versus
+authenticity," and "Privacy policy," for the full detail.
+
+## Incident library resource limits (Phase 3)
+
+Mirroring the evidence store's existing precedent, four fixed constants in
+`internal/library/limits.go` bound the library's exposure to a maliciously
+or accidentally oversized document, an oversized library, or an oversized
+single failure class: `MaxDocumentSize` (5 MiB, reused unchanged from
+`internal/idir`, enforced at the same `idir.LoadFile` boundary every other
+command already uses), `MaxLibraryEntries` (10,000 distinct fingerprints
+before `add` refuses to create a new fingerprint directory),
+`MaxOccurrencesPerFingerprint` (100 occurrences under a single fingerprint
+before `add` refuses a genuinely new one — never blocks an idempotent
+re-add), and `MaxListResults` (1,000 fingerprint entries `list` will
+enumerate in one invocation). Each is enforced independently and produces a
+distinct, actionable error naming the limit and the offending value. Every
+`library` subcommand runs under the same 30-second overall command timeout
+every other subcommand already has. See
+[`incident-library.md`](incident-library.md), "Resource limits," for the
+full detail.
+
 ## Path traversal through CLI inputs
 
 `incidentdna validate/fingerprint/inspect` open exactly the file path(s)
@@ -196,25 +279,32 @@ exists and refuses to proceed (non-zero exit, no write) unless `--force` is
 passed — verified in `cmd/incidentdna/cli_test.go` and manually in
 `phase-1-report.md`. No other subcommand writes any file.
 
-## Future multi-tenant risks (explicitly out of scope through Phase 2)
+## Future multi-tenant risks (explicitly out of scope through Phase 3)
 
-Neither Phase 1 nor Phase 2 has a concept of a tenant, user account, or
-shared incident library — every invocation, including every `evidence`
-subcommand, operates on files and a store the invoking user already has
-filesystem access to, with no access control layer of its own. Risks that
-become relevant once a shared/multi-tenant incident library or evidence
-store exists, deliberately deferred to a later phase:
+Phase 3's incident library is **local and single-user, not shared or
+multi-tenant** — it is the same trust boundary as the evidence store before
+it: no concept of a tenant, user account, or access-control layer of its
+own. Every invocation, including every `library` and `evidence` subcommand,
+operates on files and a store the invoking user already has filesystem
+access to. Risks that become relevant only if a shared/remote/multi-tenant
+incident library or evidence store is built in a later phase — none of this
+exists today, and Phase 3 explicitly does not build it (see
+[`product-scope.md`](product-scope.md)):
 
 - Cross-tenant fingerprint/identity leakage (can one tenant infer another
   tenant's incident existed, from a shared fingerprint namespace?).
 - Authorization for who may write, read, or mark an incident "resolved" in
-  a shared library.
+  a shared library — Phase 3's library has no concept of an incident being
+  "approved," "resolved," or owned by anyone; presence in the library
+  proves only internal self-consistency (see "Incident library: local
+  filesystem risks (Phase 3)" above).
 - Rate limiting / quota enforcement once ingestion is not "a person runs a
   CLI against a file they already have."
-- Tenant isolation for the evidence store: Phase 2's store is a single flat
-  local directory tree with no per-tenant namespacing, access control, or
-  quota beyond the per-invocation resource limits in
-  [`evidence-storage.md`](evidence-storage.md) — appropriate for a single
+- Tenant isolation for the evidence store or the incident library: both are
+  a single flat local directory tree with no per-tenant namespacing, access
+  control, or quota beyond the per-invocation resource limits in
+  [`evidence-storage.md`](evidence-storage.md) and
+  [`incident-library.md`](incident-library.md) — appropriate for a single
   local user, not for a store shared across untrusted parties.
 
 None of these are mitigated today because none of the underlying

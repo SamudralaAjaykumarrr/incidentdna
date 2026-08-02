@@ -76,6 +76,27 @@ proof, no remote storage). A separate, fully fictional example,
 to demonstrate the four commands end-to-end without touching
 `examples/duplicate-payment/` or its golden fingerprint.
 
+## Phase 3: local incident library
+
+Phase 3 adds a local, filesystem-backed library of validated incident
+*occurrences*, grouped by the existing deterministic failure fingerprint
+(`internal/fingerprint.Compute`, unchanged), plus three `incidentdna library`
+subcommands (`add`, `check`, `list`) to write to and read from it. The
+fingerprint identifies a *failure class*, not a unique occurrence, so the
+library stores multiple distinct occurrences under one fingerprint rather
+than deduplicating to a single entry: a new `incident.id` under an existing
+fingerprint is stored as another occurrence, a repeated (or
+formatting-reformatted) `incident.id` is idempotent, and a same-`incident.id`
+document with materially different content is refused as a conflict. See
+[`docs/incident-library.md`](docs/incident-library.md) for the full design —
+store layout, resource limits, the privacy gate, path-traversal/symlink
+protections, and what is explicitly *not* covered (no encryption at rest, no
+signing/authenticity proof, no remote storage, no release gating, no
+executable regression scenarios). A third, fully fictional example,
+[`examples/incident-library-demo/`](examples/incident-library-demo/), exists
+to demonstrate `add`/`check`/`list` end-to-end without touching
+`examples/duplicate-payment/` or `examples/evidence-storage-demo/`.
+
 ## CLI commands
 
 ```
@@ -113,13 +134,33 @@ incidentdna evidence list [--store <dir>] <incident-file>
 incidentdna evidence inspect [--store <dir>] <digest>
     Report metadata (presence, size, integrity) about one stored object,
     addressed directly by digest. Never prints its content.
+
+incidentdna library add [--library <dir>] [--allow-unredacted] <file>
+    Validate and fingerprint <file>, enforce the privacy gate
+    (privacy.redacted == true by default), and store it as a library
+    occurrence: a new incident.id under an existing fingerprint is stored as
+    another occurrence, a repeated (or reformatted) incident.id is
+    idempotent, and a same-incident.id document with materially different
+    content is refused as a conflict.
+
+incidentdna library check [--library <dir>] <file>
+    Validate and fingerprint <file>, and report whether the library holds
+    one or more intact occurrences under that fingerprint.
+
+incidentdna library list [--library <dir>]
+    Enumerate every fingerprint currently stored, each with its occurrence
+    count and a bounded per-occurrence summary (incident id, title,
+    application/service, occurred timestamp) — never the full stored
+    document.
 ```
 
 Exit codes are meaningful and relied on by CI: `0` success, `1`
 I/O/parse/usage error, `2` semantic validation failure (or, for `evidence
-verify`/`evidence inspect`, a MISSING/CORRUPTED finding). See
-[`docs/evidence-storage.md`](docs/evidence-storage.md) for the full
-`evidence` command reference.
+verify`/`evidence inspect`, a MISSING/CORRUPTED finding; or, for `library
+check`, no matching fingerprint found). See
+[`docs/evidence-storage.md`](docs/evidence-storage.md) and
+[`docs/incident-library.md`](docs/incident-library.md) for the full
+`evidence` and `library` command references.
 
 `incidentdna` performs no network access and collects no telemetry —
 every subcommand is pure local file I/O.
@@ -178,9 +219,11 @@ internal/canonical/    Deterministic ("canonical") JSON re-encoder
 internal/fingerprint/  Identity-payload extraction -> canonical -> sha256
 internal/compare/      Fingerprint comparison + per-dimension diff
 internal/evidence/     Local content-addressed evidence store + digest verification
+internal/library/      Local incident library: occurrences grouped by fingerprint
 schemas/idir/v0.1/     Documentation-grade JSON Schema for the format
 examples/duplicate-payment/     Synthetic example used by tests and `make example`
 examples/evidence-storage-demo/ Separate synthetic example for `incidentdna evidence`
+examples/incident-library-demo/ Separate synthetic example for `incidentdna library`
 testdata/golden/       Golden fingerprint + one fixture per rejected validation case
 ```
 
@@ -246,6 +289,14 @@ exact field-by-field inclusion table and the reasoning behind it.
   their declared digest — not that the evidence is truthful, or who stored
   it. Stored evidence is not encrypted at rest. See
   [`docs/evidence-storage.md`](docs/evidence-storage.md).
+- **Library occurrence verification is integrity-only, not authenticity,
+  either.** `incidentdna library check`/`list` prove a stored occurrence's
+  bytes re-hash to the digest recorded for it — not that the incident is
+  truthful, or who added it. Stored occurrences are not encrypted at rest.
+  `library add` requires `privacy.redacted == true` by default
+  (`--allow-unredacted` overrides it with a mandatory warning); that flag is
+  author-declared, not independently verified. See
+  [`docs/incident-library.md`](docs/incident-library.md).
 - **Documents decode into a fixed typed struct**, never
   `interface{}`/`map[string]interface{}`, closing off a class of YAML-parser
   abuse.
@@ -270,12 +321,12 @@ are in [`docs/threat-model.md`](docs/threat-model.md) and
 
 ```
 cmd/incidentdna/    CLI entrypoint and subcommands
-internal/           idir, validate, canonical, fingerprint, compare, evidence packages
+internal/           idir, validate, canonical, fingerprint, compare, evidence, library packages
 schemas/idir/v0.1/  Documentation-grade JSON Schema for IDIR v0.1
 examples/           Synthetic example incident(s)
 testdata/golden/    Golden fingerprint and validation-rejection fixtures
-scripts/            Golden-fingerprint verification script
-docs/               Architecture, IDIR spec, fingerprint design, evidence storage, threat model, privacy model, product scope
+scripts/            Golden-fingerprint and demo verification scripts
+docs/               Architecture, IDIR spec, fingerprint design, evidence storage, incident library, threat model, privacy model, product scope
 Dockerfile.dev, compose.yaml, Makefile   Containerized dev/build/test workflow
 ```
 
@@ -285,10 +336,13 @@ Phase 1 is complete for its own stated scope: representing, validating,
 fingerprinting, and comparing IDIR documents through a CLI, with no
 dependency on any storage, transport, or UI layer. Phase 2 adds a local
 evidence store and digest verification on top of that foundation, without
-changing it. Within that combined scope, the following limitations are by
+changing it. Phase 3 adds a local incident library — validated occurrences
+grouped by fingerprint, with lookup — on top of both, again without changing
+either. Within that combined scope, the following limitations are by
 design — see [`docs/threat-model.md`](docs/threat-model.md),
-[`docs/privacy-model.md`](docs/privacy-model.md), and
-[`docs/evidence-storage.md`](docs/evidence-storage.md):
+[`docs/privacy-model.md`](docs/privacy-model.md),
+[`docs/evidence-storage.md`](docs/evidence-storage.md), and
+[`docs/incident-library.md`](docs/incident-library.md):
 
 - **No semantic tamper detection.** Validation checks internal coherence
   (no dangling refs, no cycles, required fields present), not whether a
@@ -306,6 +360,20 @@ design — see [`docs/threat-model.md`](docs/threat-model.md),
   garbage collection, and fixed (non-configurable) resource limits** on
   evidence size/count per command. See
   [`docs/evidence-storage.md`](docs/evidence-storage.md) for the full list.
+- **The incident library groups occurrences, it does not gate or execute
+  anything.** `library check` is an offline lookup command; it does not wire
+  into any CI/CD pipeline, and the library does not generate, run, or replay
+  any test or fault-injection scenario. Library occurrences are not
+  encrypted at rest, not signed, not stored remotely, and not
+  garbage-collected. The library's four resource limits
+  (`MaxLibraryEntries`, `MaxOccurrencesPerFingerprint`, `MaxListResults`,
+  and the reused `MaxDocumentSize`) are fixed, not configurable. See
+  [`docs/incident-library.md`](docs/incident-library.md) for the full list.
+- **The incident library is not an authorization or trust system.** Its
+  integrity checks prove a stored occurrence's bytes match the digest
+  recorded for it — not that the incident is truthful, that its author
+  reviewed it, or who added it. It has no user accounts, no access control,
+  and no concept of an incident being "approved."
 
 This codebase contains no React/web framework, no Kubernetes or cloud
 infrastructure, no Kafka or event-ingestion integration, no OpenTelemetry or
@@ -338,11 +406,30 @@ is not integrated with any other repository.
 - See [`docs/evidence-storage.md`](docs/evidence-storage.md) for the full
   design and its explicit limitations.
 
+**Implemented (Phase 3, this repository):**
+
+- A local, filesystem-backed incident library
+  (`.incidentdna/library/objects` by default), grouping validated
+  occurrences by the existing deterministic failure fingerprint
+- `incidentdna library add` / `check` / `list`
+- Exact-document idempotency, multiple occurrences per fingerprint,
+  conflict detection on same-`incident.id`/different-content documents, and
+  corrupted-occurrence detection
+- A privacy gate (`privacy.redacted == true` required by default,
+  `--allow-unredacted` override with a mandatory warning) enforced before
+  any occurrence is persisted
+- Path-traversal and symlink protections, atomic writes, and four fixed
+  resource limits (`MaxDocumentSize`, `MaxLibraryEntries`,
+  `MaxOccurrencesPerFingerprint`, `MaxListResults`)
+- A third, fully fictional `examples/incident-library-demo/` example
+- See [`docs/incident-library.md`](docs/incident-library.md) for the full
+  design and its explicit limitations.
+
 **Future work (not started, not scoped, not implemented in this codebase):**
-a shared incident library with storage and retrieval, ingestion from
-observability/event systems, integration into release gating, evidence
-signing/authenticity proof, remote/cloud evidence storage, and any of the
-other items listed as explicitly out of scope in
+ingestion from observability/event systems, integration into release gating,
+evidence/library signing or authenticity proof, remote/cloud storage for
+either the evidence store or the incident library, and any of the other
+items listed as explicitly out of scope in
 [`docs/product-scope.md`](docs/product-scope.md). None of this exists yet;
 treat any description of it as forward-looking, not current capability.
 

@@ -37,6 +37,7 @@ var commands = []command{
 	{"inspect", runInspect},
 	{"compare", runCompare},
 	{"evidence", runEvidence},
+	{"library", runLibrary},
 }
 
 func main() {
@@ -89,6 +90,10 @@ Usage:
   incidentdna evidence <store|verify|list|inspect> ...
       Local content-addressed evidence storage and digest verification.
       Run "incidentdna evidence help" for subcommand details.
+  incidentdna library <add|check|list> ...
+      Local incident library: persist validated incident occurrences and
+      look up whether a candidate document's fingerprint already exists.
+      Run "incidentdna library help" for subcommand details.
 
 incidentdna performs no network access and collects no telemetry.
 `)
