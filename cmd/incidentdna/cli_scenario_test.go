@@ -1,12 +1,15 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/SamudralaAjaykumarrr/incidentdna/internal/library"
 )
 
 // --- shared fixtures/helpers for the `incidentdna scenario` CLI surface ---
@@ -35,6 +38,31 @@ execution:
 expected:
   exit_code: %d
 `, name, strings.Repeat("a", 64), strings.Join(quoted, ", "), timeoutSeconds, exitCode)
+
+	path := filepath.Join(dir, name+".yaml")
+	if err := os.WriteFile(path, []byte(yaml), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+// writeScenarioYAMLWithFingerprint writes a minimal but complete IRS v0.1
+// scenario document declaring linked_fingerprint exactly as given (used by
+// the --library cross-reference tests, which need a scenario's declared
+// fingerprint to match a fingerprint already seeded into a test library),
+// and returns its path.
+func writeScenarioYAMLWithFingerprint(t *testing.T, dir, name, linkedFingerprint string) string {
+	t.Helper()
+	yaml := fmt.Sprintf(`schema_version: irs/v0.1
+scenario:
+  id: %s
+linked_fingerprint: %q
+execution:
+  command: ["/bin/true"]
+  timeout_seconds: 5
+expected:
+  exit_code: 0
+`, name, linkedFingerprint)
 
 	path := filepath.Join(dir, name+".yaml")
 	if err := os.WriteFile(path, []byte(yaml), 0o644); err != nil {
@@ -153,6 +181,200 @@ func TestCLI_ScenarioVerify_SourceMismatchReturnsExitTwo(t *testing.T) {
 	}
 	if !strings.Contains(stderr, "does not match") {
 		t.Fatalf("expected stderr to explain the mismatch, got: %s", stderr)
+	}
+}
+
+// ============================================================================
+// 1b. incidentdna scenario verify --library (docs/phase-6-plan.md)
+// ============================================================================
+
+func TestCLI_ScenarioVerify_LibraryMatch(t *testing.T) {
+	bin := buildBinary(t)
+	dir := t.TempDir()
+	libDir := filepath.Join(dir, "library")
+
+	st, err := library.Open(libDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc := minimalRedactedLibraryDoc("INC-SCEN-LIB-MATCH", "Scenario library cross-reference match incident")
+	addRes, err := library.Add(context.Background(), st, doc, library.AddOptions{})
+	if err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+
+	scenarioPath := filepath.Join(dir, "scenario-match.yaml")
+	yaml := fmt.Sprintf(`schema_version: irs/v0.1
+scenario:
+  id: scenario-match
+linked_fingerprint: %q
+execution:
+  command: ["/bin/true"]
+expected:
+  exit_code: 0
+`, addRes.Fingerprint)
+	if err := os.WriteFile(scenarioPath, []byte(yaml), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	stdout, stderr, code := runCLI(t, bin, "scenario", "verify", "--library", libDir, scenarioPath)
+	if code != 0 {
+		t.Fatalf("expected exit 0, got %d; stdout: %s; stderr: %s", code, stdout, stderr)
+	}
+	if !strings.Contains(stdout, "Library: 1 occurrence(s) found for this fingerprint") {
+		t.Fatalf("expected stdout to report a library match, got: %s", stdout)
+	}
+}
+
+func TestCLI_ScenarioVerify_LibraryNoMatchOnExistingLibrary(t *testing.T) {
+	bin := buildBinary(t)
+	dir := t.TempDir()
+	libDir := filepath.Join(dir, "library")
+
+	// Seed the library so its root exists on disk, but under a fingerprint
+	// unrelated to the scenario below.
+	st, err := library.Open(libDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	unrelated := minimalRedactedLibraryDoc("INC-SCEN-LIB-UNRELATED", "Unrelated incident")
+	if _, err := library.Add(context.Background(), st, unrelated, library.AddOptions{}); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+
+	path := writeScenarioYAML(t, dir, "scenario-no-match", []string{"/bin/true"}, 0, 5)
+
+	stdout, stderr, code := runCLI(t, bin, "scenario", "verify", "--library", libDir, path)
+	if code != 0 {
+		t.Fatalf("expected exit 0 for a no-match library lookup (never exit 2), got %d; stdout: %s; stderr: %s", code, stdout, stderr)
+	}
+	if !strings.Contains(stdout, "Library: no occurrences found for this fingerprint (not yet recorded in the library)") {
+		t.Fatalf("expected stdout to report no library occurrences, got: %s", stdout)
+	}
+}
+
+func TestCLI_ScenarioVerify_LibraryNotYetCreatedTreatedAsNoMatch(t *testing.T) {
+	bin := buildBinary(t)
+	dir := t.TempDir()
+	// libDir intentionally never created on disk.
+	libDir := filepath.Join(dir, "never-created-library")
+
+	path := writeScenarioYAML(t, dir, "scenario-no-lib", []string{"/bin/true"}, 0, 5)
+
+	stdout, stderr, code := runCLI(t, bin, "scenario", "verify", "--library", libDir, path)
+	if code != 0 {
+		t.Fatalf("expected exit 0 for a not-yet-created library, got %d; stdout: %s; stderr: %s", code, stdout, stderr)
+	}
+	if !strings.Contains(stdout, "Library: no occurrences found for this fingerprint (not yet recorded in the library)") {
+		t.Fatalf("expected stdout to treat a not-yet-created library as no occurrences, got: %s", stdout)
+	}
+}
+
+func TestCLI_ScenarioVerify_LibraryMalformedReturnsExitOne(t *testing.T) {
+	bin := buildBinary(t)
+	dir := t.TempDir()
+	libDir := filepath.Join(dir, "library")
+
+	st, err := library.Open(libDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc := minimalRedactedLibraryDoc("INC-SCEN-LIB-MALFORMED", "Malformed library incident")
+	addRes, err := library.Add(context.Background(), st, doc, library.AddOptions{})
+	if err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	idxPath, err := st.IndexPath(addRes.Fingerprint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(idxPath, []byte("{not valid json"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	scenarioPath := filepath.Join(dir, "scenario-malformed.yaml")
+	yaml := fmt.Sprintf(`schema_version: irs/v0.1
+scenario:
+  id: scenario-malformed
+linked_fingerprint: %q
+execution:
+  command: ["/bin/true"]
+expected:
+  exit_code: 0
+`, addRes.Fingerprint)
+	if err := os.WriteFile(scenarioPath, []byte(yaml), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	stdout, stderr, code := runCLI(t, bin, "scenario", "verify", "--library", libDir, scenarioPath)
+	if code != 1 {
+		t.Fatalf("expected exit 1 for a malformed library, got %d; stdout: %s; stderr: %s", code, stdout, stderr)
+	}
+	if !strings.Contains(stderr, "malformed") {
+		t.Fatalf("expected stderr to describe the malformed library, got: %s", stderr)
+	}
+}
+
+func TestCLI_ScenarioVerify_LibraryCombinedWithSource(t *testing.T) {
+	bin := buildBinary(t)
+	dir := t.TempDir()
+	libDir := filepath.Join(dir, "library")
+
+	goldenPath := filepath.Join(repoRoot(t), "testdata", "golden", "duplicate-payment.fingerprint")
+	golden, err := os.ReadFile(goldenPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fp := strings.TrimSpace(string(golden))
+
+	// Seed the library with the duplicate-payment example itself, via the
+	// CLI, so the seeded fingerprint is exactly the golden fingerprint
+	// --source will also compute.
+	if _, stderr, code := runCLI(t, bin, "library", "add", "--library", libDir, "--allow-unredacted", examplePath(t)); code != 0 {
+		t.Fatalf("library add: expected exit 0, got %d; stderr: %s", code, stderr)
+	}
+
+	scenarioPath := filepath.Join(dir, "combined.yaml")
+	yaml := `schema_version: irs/v0.1
+scenario:
+  id: combined
+linked_fingerprint: "` + fp + `"
+execution:
+  command: ["/bin/true"]
+expected:
+  exit_code: 0
+`
+	if err := os.WriteFile(scenarioPath, []byte(yaml), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	stdout, stderr, code := runCLI(t, bin, "scenario", "verify", "--source", examplePath(t), "--library", libDir, scenarioPath)
+	if code != 0 {
+		t.Fatalf("expected exit 0, got %d; stdout: %s; stderr: %s", code, stdout, stderr)
+	}
+	if !strings.Contains(stdout, "linked_fingerprint matches --source") {
+		t.Fatalf("expected stdout to confirm the --source match, got: %s", stdout)
+	}
+	if !strings.Contains(stdout, "Library: 1 occurrence(s) found for this fingerprint") {
+		t.Fatalf("expected stdout to confirm the --library match, got: %s", stdout)
+	}
+}
+
+func TestCLI_ScenarioVerify_LibraryOmittedProducesUnchangedOutput(t *testing.T) {
+	bin := buildBinary(t)
+	dir := t.TempDir()
+	path := writeScenarioYAML(t, dir, "no-library-flag", []string{"/bin/true"}, 0, 5)
+
+	stdout, stderr, code := runCLI(t, bin, "scenario", "verify", path)
+	if code != 0 {
+		t.Fatalf("expected exit 0, got %d; stdout: %s; stderr: %s", code, stdout, stderr)
+	}
+	want := fmt.Sprintf("Scenario: no-library-flag (schema irs/v0.1)\nLinked fingerprint: sha256:%s\nOK: scenario is structurally valid\n", strings.Repeat("a", 64))
+	if stdout != want {
+		t.Fatalf("expected --library-omitted output to be byte-identical to the pre-Phase-6 baseline, got:\n%q\nwant:\n%q", stdout, want)
+	}
+	if strings.Contains(stdout, "Library:") {
+		t.Fatalf("expected no Library: line when --library is omitted, got: %s", stdout)
 	}
 }
 

@@ -196,7 +196,34 @@ regression-scenario runner, persists nothing durable by default:
   printed/reported for manual inspection and cleanup, exactly as
   `--keep-workspace` already behaves for a standalone `scenario run`.
 
-## What Phase 1 through Phase 5 do not do
+## Library cross-reference privacy implications (Phase 6)
+
+Phase 6 adds a read-only, purely informational lookup (see
+[`library-crossref.md`](library-crossref.md)) between a scenario's/suite's
+declared `linked_fingerprint` and the incident library's stored occurrences,
+exposed via an optional `--library` flag on `scenario verify`/`suite
+verify`:
+
+- **No new document field, no new persisted data.** Phase 6 introduces no
+  privacy/redaction-relevant field anywhere; it reads an already-declared,
+  already-format-checked `linked_fingerprint` value and an already-existing
+  library's already-stored occurrence metadata (fingerprint + occurrence
+  count only — never a stored occurrence's full content, exactly as
+  `library check` already limits itself to).
+- **No new content is ever printed.** The `Library:` line prints only a
+  fingerprint (already visible in the scenario/suite's own `Linked
+  fingerprint:` line) and an occurrence count — never an occurrence's
+  incident id, title, service, or any other stored field. `library list`
+  remains the only command in this codebase that prints per-occurrence
+  metadata.
+- **No network access means no telemetry, no external transmission** —
+  restating the unconditional project invariant, extended to the one new
+  `cmd/incidentdna` → `internal/library` call path this phase adds.
+- **No mutation of the library.** The lookup never calls `library.Add`; a
+  scenario/suite author who wants a fingerprint to show up as "found" must
+  still run `incidentdna library add` themselves, exactly as before Phase 6.
+
+## What Phase 1 through Phase 6 do not do
 
 - No automatic redaction — nothing in this codebase removes or masks
   sensitive content; validation only checks that an author's manual

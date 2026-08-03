@@ -399,6 +399,35 @@ and a scenario author who controls their own fixed `--workspace` location is
 free to use a workspace-relative path exactly as `docs/phase-4-plan.md` §5
 illustrates.
 
+## Library cross-reference (Phase 6)
+
+`scenario verify` accepts an optional `--library <dir>` flag: after the
+existing structural/semantic (and optional `--source`) checks pass, it
+looks up the scenario's own `linked_fingerprint` against the named (or
+default) incident library and prints whether the library holds one or more
+recorded occurrences under it — purely informational, never affecting
+`scenario verify`'s own exit code, and never touching `scenario run` at
+all.
+
+```
+$ incidentdna scenario verify --library .incidentdna/library/objects \
+    examples/regression-scenario-demo/scenario-pass.yaml
+Scenario: duplicate-payment-refingerprint (schema irs/v0.1)
+Linked fingerprint: sha256:fc3dac016d31dcca1a58c0242c45474107dd69c1e7718d9cdebdbe357bca2a8e
+Library: 1 occurrence(s) found for this fingerprint
+OK: scenario is structurally valid
+```
+
+`--library` omitted is byte-for-byte identical to pre-Phase-6 output — no
+`Library:` line appears unless the flag is explicitly given. A library that
+does not exist yet is treated as "no occurrences found," never an error; a
+malformed library (corrupted `index.json`, an unexpected shard/fingerprint
+directory shape) maps to exit `1`. This is implemented entirely at the
+`cmd/incidentdna` layer, calling the new `library.CheckFingerprint`
+directly — `internal/scenario` itself is not modified and gains no new
+import. See [`library-crossref.md`](library-crossref.md) for the full
+design, including the `suite verify --library` equivalent.
+
 ## Privacy implications
 
 Scenario documents carry no dedicated privacy/redaction block (no
@@ -430,9 +459,14 @@ code*, not about what a scenario's *executed command* might itself do — see
   scenario's command runs with the full permissions of the invoking user.
 - **No suite runner.** Exactly one scenario per invocation; discovering,
   aggregating, or parallelizing multiple scenarios is not built.
-- **No coupling to the incident library.** A scenario's `linked_fingerprint`
-  is never checked against stored library occurrences automatically — only
-  against a directly-named `--source` incident file.
+- **No automatic coupling to the incident library.** A scenario's
+  `linked_fingerprint` is never checked against stored library occurrences
+  as part of `scenario run`, and `internal/scenario` itself still does not
+  import or query `internal/library`. As of Phase 6, `scenario verify
+  --library` offers an optional, read-only, informational lookup for this —
+  see "Library cross-reference (Phase 6)" above — but it remains
+  `verify`-only, non-gating, and implemented entirely outside
+  `internal/scenario`.
 - **No release gating.** `scenario run`'s exit code and JSON report are
   *available* to be consumed by something else, but `incidentdna` itself
   does not wire any scenario result into a gate, a policy decision, a merge

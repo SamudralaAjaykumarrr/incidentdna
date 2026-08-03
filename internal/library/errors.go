@@ -123,4 +123,12 @@ var (
 	// §10/§12). The error carries no document content beyond the fact of the
 	// missing declaration.
 	ErrPrivacyNotRedacted = errors.New("library: document is not declared redacted (privacy.redacted != true); pass --allow-unredacted to store it anyway")
+
+	// ErrInvalidFingerprint means a string passed to CheckFingerprint
+	// (docs/phase-6-plan.md §5) is not a well-formed "sha256:"-prefixed,
+	// 64-lowercase-hex fingerprint string. Check can never hit this path
+	// itself, since internal/fingerprint.Compute always produces a
+	// well-formed string — this is a new, additive error case introduced by
+	// Phase 6, not a change to any existing one.
+	ErrInvalidFingerprint = errors.New("library: not a valid sha256-prefixed 64-character lowercase hex fingerprint")
 )

@@ -1,12 +1,15 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/SamudralaAjaykumarrr/incidentdna/internal/library"
 )
 
 // writeSuiteYAML writes a minimal ISM v0.1 suite manifest listing the given
@@ -112,6 +115,135 @@ func TestCLI_SuiteVerify_InvalidUsage(t *testing.T) {
 		if code != 1 {
 			t.Fatalf("args %v: expected exit 1, got %d; stderr: %s", args, code, stderr)
 		}
+	}
+}
+
+// ============================================================================
+// 1b. incidentdna suite verify --library (docs/phase-6-plan.md)
+// ============================================================================
+
+func TestCLI_SuiteVerify_LibraryAllMatch(t *testing.T) {
+	bin := buildBinary(t)
+	dir := t.TempDir()
+	libDir := filepath.Join(dir, "library")
+
+	st, err := library.Open(libDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc := minimalRedactedLibraryDoc("INC-SUITE-LIB-MATCH", "Suite library cross-reference match incident")
+	addRes, err := library.Add(context.Background(), st, doc, library.AddOptions{})
+	if err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+
+	a := writeScenarioYAMLWithFingerprint(t, dir, "suite-lib-match-a", addRes.Fingerprint)
+	b := writeScenarioYAMLWithFingerprint(t, dir, "suite-lib-match-b", addRes.Fingerprint)
+	suitePath := writeSuiteYAML(t, dir, "suite-lib-match", []string{filepath.Base(a), filepath.Base(b)})
+
+	stdout, stderr, code := runCLI(t, bin, "suite", "verify", "--library", libDir, suitePath)
+	if code != 0 {
+		t.Fatalf("expected exit 0, got %d; stdout: %s; stderr: %s", code, stdout, stderr)
+	}
+	if !strings.Contains(stdout, "— library: 1 occurrence(s)") {
+		t.Fatalf("expected per-scenario library annotations, got: %s", stdout)
+	}
+	// Two listed scenarios share one linked_fingerprint: the aggregate line
+	// must reflect 1 *distinct* fingerprint, not the raw 2-scenario count.
+	if !strings.Contains(stdout, "Library cross-reference: 1 of 1 distinct linked fingerprint(s) have library occurrences") {
+		t.Fatalf("expected the aggregate line to reflect dedup by distinct fingerprint, got: %s", stdout)
+	}
+}
+
+func TestCLI_SuiteVerify_LibraryMixedMatchAndNoMatch(t *testing.T) {
+	bin := buildBinary(t)
+	dir := t.TempDir()
+	libDir := filepath.Join(dir, "library")
+
+	st, err := library.Open(libDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc := minimalRedactedLibraryDoc("INC-SUITE-LIB-MIXED", "Suite library cross-reference mixed incident")
+	addRes, err := library.Add(context.Background(), st, doc, library.AddOptions{})
+	if err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+
+	matched := writeScenarioYAMLWithFingerprint(t, dir, "suite-lib-mixed-match", addRes.Fingerprint)
+	unmatched := writeScenarioYAML(t, dir, "suite-lib-mixed-nomatch", []string{"/bin/true"}, 0, 5)
+	suitePath := writeSuiteYAML(t, dir, "suite-lib-mixed", []string{filepath.Base(matched), filepath.Base(unmatched)})
+
+	stdout, stderr, code := runCLI(t, bin, "suite", "verify", "--library", libDir, suitePath)
+	if code != 0 {
+		t.Fatalf("expected exit 0, got %d; stdout: %s; stderr: %s", code, stdout, stderr)
+	}
+	if !strings.Contains(stdout, "— library: 1 occurrence(s)") {
+		t.Fatalf("expected a matched per-scenario annotation, got: %s", stdout)
+	}
+	if !strings.Contains(stdout, "— library: no occurrences") {
+		t.Fatalf("expected a no-match per-scenario annotation, got: %s", stdout)
+	}
+	if !strings.Contains(stdout, "Library cross-reference: 1 of 2 distinct linked fingerprint(s) have library occurrences") {
+		t.Fatalf("expected the aggregate line to report 1 of 2 distinct fingerprints, got: %s", stdout)
+	}
+}
+
+func TestCLI_SuiteVerify_LibraryMalformedReturnsExitOne(t *testing.T) {
+	bin := buildBinary(t)
+	dir := t.TempDir()
+	libDir := filepath.Join(dir, "library")
+
+	st, err := library.Open(libDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc := minimalRedactedLibraryDoc("INC-SUITE-LIB-MALFORMED", "Suite malformed library incident")
+	addRes, err := library.Add(context.Background(), st, doc, library.AddOptions{})
+	if err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	idxPath, err := st.IndexPath(addRes.Fingerprint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(idxPath, []byte("{not valid json"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	a := writeScenarioYAMLWithFingerprint(t, dir, "suite-lib-malformed-a", addRes.Fingerprint)
+	suitePath := writeSuiteYAML(t, dir, "suite-lib-malformed", []string{filepath.Base(a)})
+
+	stdout, stderr, code := runCLI(t, bin, "suite", "verify", "--library", libDir, suitePath)
+	if code != 1 {
+		t.Fatalf("expected exit 1 for a malformed library, got %d; stdout: %s; stderr: %s", code, stdout, stderr)
+	}
+	if !strings.Contains(stderr, "malformed") {
+		t.Fatalf("expected stderr to describe the malformed library, got: %s", stderr)
+	}
+	// The existing suite/scenario-count header is printed before the library
+	// lookup ever runs, unaffected by the later library failure.
+	if !strings.Contains(stdout, "Suite: suite-lib-malformed") || !strings.Contains(stdout, "Scenarios: 1 listed") {
+		t.Fatalf("expected the existing suite header to have already printed, got stdout: %s", stdout)
+	}
+}
+
+func TestCLI_SuiteVerify_LibraryOmittedProducesUnchangedOutput(t *testing.T) {
+	bin := buildBinary(t)
+	dir := t.TempDir()
+	a := writeScenarioYAML(t, dir, "suite-no-library-flag-a", []string{"/bin/true"}, 0, 5)
+	b := writeScenarioYAML(t, dir, "suite-no-library-flag-b", []string{"/bin/true"}, 0, 5)
+	suitePath := writeSuiteYAML(t, dir, "no-library-flag-suite", []string{filepath.Base(a), filepath.Base(b)})
+
+	stdout, stderr, code := runCLI(t, bin, "suite", "verify", suitePath)
+	if code != 0 {
+		t.Fatalf("expected exit 0, got %d; stdout: %s; stderr: %s", code, stdout, stderr)
+	}
+	if strings.Contains(stdout, "Library") {
+		t.Fatalf("expected no Library-related output when --library is omitted, got: %s", stdout)
+	}
+	if !strings.Contains(stdout, "OK: suite manifest and all 2 listed scenarios are structurally valid") {
+		t.Fatalf("expected the unchanged validity summary line, got: %s", stdout)
 	}
 }
 

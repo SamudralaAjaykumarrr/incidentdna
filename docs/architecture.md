@@ -13,6 +13,7 @@ internal/evidence/      Local content-addressed evidence store + digest verifica
 internal/library/       Local incident library: occurrences grouped by fingerprint
 internal/scenario/      Local, bounded, offline regression-scenario runner (IRS v0.1)
 internal/suite/         Local, sequential, offline scenario suite runner (ISM v0.1)
+                         (library cross-reference, Phase 6, lives in cmd/incidentdna — see below)
 schemas/idir/v0.1/      Documentation-grade JSON Schema for the format
 examples/duplicate-payment/     Synthetic example used by tests and `make example`
 examples/evidence-storage-demo/ Separate synthetic example for `incidentdna evidence`
@@ -49,7 +50,14 @@ does not import `evidence` or `library` and is not imported by either.
 and `Run`, all unchanged — and is not imported by `idir`, `validate`,
 `canonical`, `fingerprint`, `compare`, `evidence`, `library`, or `scenario`;
 `suite` is a fifth independent, parallel leaf concern, one level further
-from the shared primitives than `scenario` itself.
+from the shared primitives than `scenario` itself. Phase 6 adds no new
+package and changes this dependency graph in exactly one place: `library`
+gains one new exported function (`CheckFingerprint`), read unchanged by
+`cmd/incidentdna`; `scenario` and `suite` still do not import, and are not
+imported by, `library` — the composition that connects a scenario's or
+suite's `linked_fingerprint` to library occurrences lives entirely at the
+`cmd/incidentdna` layer, which already imported all three packages before
+Phase 6 (see "Library cross-reference (Phase 6)" below).
 
 ## Data flow
 
@@ -221,6 +229,45 @@ v0.1 manifest format, the two `incidentdna suite` subcommands, aggregate
 outcome classification, `--fail-fast`, resource limits, and
 path-traversal/symlink protections.
 
+## Library cross-reference (Phase 6)
+
+Unlike every prior phase, Phase 6 adds no new parallel data flow and no new
+package — it composes two already-existing flows at the `cmd/incidentdna`
+layer only, inside the two existing `verify` subcommands, behind an optional
+`--library <dir>` flag:
+
+```
+scenario.Document / suite.ScenarioEntry     library.Store (opened via the
+   │  .LinkedFingerprint (already declared,   existing library.Open, the
+   │   already format-checked)                same store `library check`
+   ▼                                          reads)
+linked_fingerprint string ──────────────────────────┐
+                                                      │  library.CheckFingerprint
+                                                      │  (Phase 6, NEW — reuses
+                                                      │  Check's lookup logic
+                                                      │  after fingerprint
+                                                      │  computation)
+                                                      ▼
+                                    CheckResult{Outcome, MatchCount}
+                                                      │
+                                                      ▼
+                              "Library: N occurrence(s) found" /
+                              "Library: no occurrences found" (printed only,
+                              never affecting scenario/suite verify's own
+                              exit code)
+```
+
+`cmd_scenario.go`'s `runScenarioVerify` and `cmd_suite.go`'s
+`runSuiteVerify` each call `library.CheckFingerprint` directly — no new
+function is added to `internal/scenario` or `internal/suite`, and neither
+package gains a new import. `runSuiteVerify` additionally deduplicates the
+listed scenarios' `LinkedFingerprint` values in first-occurrence order
+before looking each up, so a suite listing many scenarios that share one
+fingerprint performs at most one lookup per distinct fingerprint. See
+[`library-crossref.md`](library-crossref.md) for the full design: the exact
+CLI output, the exit-code contract, and what this phase explicitly does not
+provide.
+
 ## CLI conventions
 
 - **Exit codes**: `0` success; `1` I/O, parse, or usage error; `2` semantic
@@ -317,4 +364,10 @@ change to it — but it still does not build a release gate, directory/glob
 scenario discovery, parallel execution, or automatic coupling to
 `internal/library`; those remain future work. See
 [`scenario-suites.md`](scenario-suites.md), "What Phase 5 explicitly does
-not provide."
+not provide." `internal/library` (Phase 6) closes the "automatic
+cross-reference" gap specifically — one new function
+(`library.CheckFingerprint`), composed with the unchanged Phase 4/5 runners
+entirely at the `cmd/incidentdna` layer — but it still does not build
+release gating, and `internal/scenario`/`internal/suite` remain unaware the
+incident library exists. See [`library-crossref.md`](library-crossref.md),
+"What Phase 6 explicitly does not provide."

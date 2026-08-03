@@ -1,19 +1,23 @@
 # Threat Model
 
 Scope: the `incidentdna` CLI and the `internal/*` libraries it's built on,
-as they exist at the end of Phase 5 — local file input, local file/stdout
+as they exist at the end of Phase 6 — local file input, local file/stdout
 output, a local content-addressed evidence store, a local incident library,
-a local, bounded, offline regression-scenario runner, and a local,
-sequential, offline scenario-suite runner. No network, no multi-user or
-multi-tenant concerns. Phase 4 introduced one new class of risk this scope
-statement did not previously need to cover: local process execution (see
-"Executable regression scenarios: local process-execution risks (Phase 4)"
-below) — every prior phase's operations were pure data/filesystem
-transformations that never executed the content they processed. Phase 5
-introduces no further new class of risk: `internal/suite` never calls
-`exec.Command` itself; every process a suite launches is launched by the
-unchanged Phase 4 runner (see "Scenario suites: aggregated local
-process-execution risk (Phase 5)" below).
+a local, bounded, offline regression-scenario runner, a local, sequential,
+offline scenario-suite runner, and a read-only cross-reference between a
+scenario's/suite's declared fingerprint and the incident library. No
+network, no multi-user or multi-tenant concerns. Phase 4 introduced one new
+class of risk this scope statement did not previously need to cover: local
+process execution (see "Executable regression scenarios: local
+process-execution risks (Phase 4)" below) — every prior phase's operations
+were pure data/filesystem transformations that never executed the content
+they processed. Phase 5 introduces no further new class of risk:
+`internal/suite` never calls `exec.Command` itself; every process a suite
+launches is launched by the unchanged Phase 4 runner (see "Scenario suites:
+aggregated local process-execution risk (Phase 5)" below). Phase 6
+introduces no new class of risk either: it is read-only local filesystem
+I/O reusing already-reviewed lookup logic (see "Library cross-reference:
+read-only lookup risk (Phase 6)" below).
 
 ## Maliciously modified incident documents
 
@@ -382,6 +386,32 @@ uses its own context bounded by `MaxSuiteTotalTimeoutSeconds`, the same
 run`. See [`scenario-suites.md`](scenario-suites.md), "Resource limits,"
 for the full detail.
 
+## Library cross-reference: read-only lookup risk (Phase 6)
+
+Phase 6 introduces no new category of risk beyond what "Incident library:
+local filesystem risks (Phase 3)" above already documents for `library
+check`: every filesystem read `library.CheckFingerprint` performs is the
+identical read `library.Check` already performs (symlink rejection,
+occurrence re-hash verification, `checkContained` path safety) — only the
+fingerprint's origin differs (a caller-supplied string, read from a
+scenario's or suite entry's already-declared `linked_fingerprint` field,
+versus one computed from a document). `library.CheckFingerprint` is called
+only from `cmd/incidentdna`'s `scenario verify --library` and `suite verify
+--library` code paths; it never writes, never creates the library root, and
+is never reachable from `scenario run` or `suite run`.
+
+The one genuinely new consideration, stated plainly rather than implied
+away: `scenario verify --library`/`suite verify --library` let a caller ask
+"does the library record this fingerprint" using only a fingerprint string
+they already have (from a scenario or suite file) rather than a full
+incident document — a strictly more convenient path to information `library
+check` already made obtainable, not a new disclosure. Resource exposure is
+bounded by the same limits already in force: a suite's listed-scenario
+count is already capped by `suite.MaxScenariosPerSuite` (100), which in turn
+caps how many distinct fingerprints one `suite verify --library` invocation
+can look up; no new resource limit is introduced. See
+[`library-crossref.md`](library-crossref.md) for the full design.
+
 ## Path traversal through CLI inputs
 
 `incidentdna validate/fingerprint/inspect` open exactly the file path(s)
@@ -468,19 +498,19 @@ exists and refuses to proceed (non-zero exit, no write) unless `--force` is
 passed — verified in `cmd/incidentdna/cli_test.go` and manually in
 `phase-1-report.md`. No other subcommand writes any file.
 
-## Future multi-tenant risks (explicitly out of scope through Phase 5)
+## Future multi-tenant risks (explicitly out of scope through Phase 6)
 
-Phase 3's incident library, Phase 4's regression-scenario runner, and Phase
-5's scenario-suite runner are **local and single-user, not shared or
-multi-tenant** — the same trust boundary as the evidence store before them:
-no concept of a tenant, user account, or access-control layer of its own.
-Every invocation, including every `library`, `evidence`, `scenario`, and
-`suite` subcommand, operates on files (and, for `library`/`evidence`, a
-store) the invoking user already has filesystem access to. Risks that
-become relevant only if a shared/remote/multi-tenant incident library,
-evidence store, or scenario/suite execution service is built in a later
-phase — none of this exists today, and Phase 5 explicitly does not build it
-(see [`product-scope.md`](product-scope.md)):
+Phase 3's incident library, Phase 4's regression-scenario runner, Phase 5's
+scenario-suite runner, and Phase 6's library cross-reference are **local
+and single-user, not shared or multi-tenant** — the same trust boundary as
+the evidence store before them: no concept of a tenant, user account, or
+access-control layer of its own. Every invocation, including every
+`library`, `evidence`, `scenario`, and `suite` subcommand, operates on files
+(and, for `library`/`evidence`, a store) the invoking user already has
+filesystem access to. Risks that become relevant only if a shared/remote/
+multi-tenant incident library, evidence store, or scenario/suite execution
+service is built in a later phase — none of this exists today, and Phase 6
+explicitly does not build it (see [`product-scope.md`](product-scope.md)):
 
 - Cross-tenant fingerprint/identity leakage (can one tenant infer another
   tenant's incident existed, from a shared fingerprint namespace?).
