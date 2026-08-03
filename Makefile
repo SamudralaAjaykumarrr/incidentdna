@@ -1,4 +1,4 @@
-.PHONY: format lint test build example example-evidence example-library example-scenario example-suite example-library-crossref verify clean
+.PHONY: format lint test build example example-evidence example-library example-scenario example-suite example-library-crossref example-policy verify clean
 
 # Every target runs inside the dev container defined by Dockerfile.dev /
 # compose.yaml, so a contributor never needs Go installed on the host.
@@ -76,7 +76,18 @@ example-suite: build
 example-library-crossref: build
 	$(RUN) sh scripts/verify-library-crossref-demo.sh
 
-verify: lint test build example example-evidence example-library example-scenario example-suite example-library-crossref
+# Phase 7: end-to-end check of `incidentdna policy verify|evaluate` against
+# policies/release-gate-example.yaml, composing already-existing fixtures
+# from examples/duplicate-payment/, examples/regression-scenario-demo/, and
+# examples/regression-suite-demo/ (no new example directory), using
+# temporary report/--library/--report locations (never the current
+# directory or the default .incidentdna/library/objects) so this never
+# leaves generated output in the repository. See
+# scripts/verify-policy-demo.sh and docs/policy-evaluation.md.
+example-policy: build
+	$(RUN) sh scripts/verify-policy-demo.sh
+
+verify: lint test build example example-evidence example-library example-scenario example-suite example-library-crossref example-policy
 	$(RUN) sh scripts/verify-golden-fingerprint.sh
 
 clean:

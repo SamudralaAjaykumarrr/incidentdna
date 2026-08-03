@@ -14,6 +14,7 @@ internal/library/       Local incident library: occurrences grouped by fingerpri
 internal/scenario/      Local, bounded, offline regression-scenario runner (IRS v0.1)
 internal/suite/         Local, sequential, offline scenario suite runner (ISM v0.1)
                          (library cross-reference, Phase 6, lives in cmd/incidentdna — see below)
+internal/policy/        Local, deterministic policy evaluation over an already-produced report (IGP v0.1)
 schemas/idir/v0.1/      Documentation-grade JSON Schema for the format
 examples/duplicate-payment/     Synthetic example used by tests and `make example`
 examples/evidence-storage-demo/ Separate synthetic example for `incidentdna evidence`
@@ -57,7 +58,19 @@ gains one new exported function (`CheckFingerprint`), read unchanged by
 imported by, `library` — the composition that connects a scenario's or
 suite's `linked_fingerprint` to library occurrences lives entirely at the
 `cmd/incidentdna` layer, which already imported all three packages before
-Phase 6 (see "Library cross-reference (Phase 6)" below).
+Phase 6 (see "Library cross-reference (Phase 6)" below). `internal/policy`
+(Phase 7) is a new, sixth parallel leaf package: it imports `internal/scenario`
+and `internal/suite` **only** for their existing, unchanged `Report` struct
+definitions (to decode an already-produced report file into a typed value),
+and is not imported by `idir`, `validate`, `canonical`, `fingerprint`,
+`compare`, `evidence`, `library`, `scenario`, or `suite`. Unlike `scenario`
+and `suite`, `internal/policy` does not import `internal/library` at all and
+does not know the incident library exists — the `require_library_occurrence`
+rule is evaluated against a caller-supplied lookup result
+(`policy.LibraryLookups`), and the composition that opens the library and
+calls `library.CheckFingerprint` lives entirely at the `cmd/incidentdna`
+layer, the identical discipline Phase 6 established (see "Local policy
+evaluation (Phase 7)" below).
 
 ## Data flow
 
@@ -268,6 +281,55 @@ fingerprint performs at most one lookup per distinct fingerprint. See
 CLI output, the exit-code contract, and what this phase explicitly does not
 provide.
 
+## Local policy evaluation (Phase 7)
+
+`internal/policy` is a new, sixth parallel data flow: unlike every prior
+phase, it never reads a scenario or suite *document* at all — it only
+consumes an already-produced *report artifact* (Phase 4/5's own
+`--report` JSON output, unchanged), plus an optional fresh Phase 6-style
+library lookup, composed one layer up in `cmd/incidentdna`:
+
+```
+scenario.Report / suite.Report JSON file          policy document (IGP v0.1)
+(Phase 4/5, unchanged, read via --report)             |  policy.LoadFile + policy.Validate
+   |  policy.LoadScenarioReport /                      v
+   |  policy.LoadSuiteReport --                  (valid) policy.Document
+   |  decode into the unchanged                          |
+   |  Report struct, extract                              |
+   |  result + distinct                                    |
+   |  linked_fingerprint values                             |
+   v                                                         |
+policy.LoadedReport{Kind, Result,                            |
+  DistinctFingerprints}                                      |
+   |                                                          |
+   |          distinct fingerprints           incident library
+   |             |  library.CheckFingerprint     (Phase 3, unchanged)
+   |             |  (Phase 6, unchanged) --             ^
+   |             |  composed in cmd/incidentdna,         |
+   |             v  never inside internal/policy         |
+   |          policy.LibraryLookups{fingerprint: bool} ---+
+   |             |
+   v             v
+policy.Evaluate(policyDoc, report, libraryLookups)
+   |
+   v
+per-rule OK/FAIL/SKIP + overall verdict PASS/FAIL
+   |  policy.BuildReport + policy.WriteReport (--report only)
+   v
+deterministic JSON verdict report (policy-report/v0.1)
+```
+
+`cmd/incidentdna/cmd_policy.go`'s `runPolicyEvaluate` composes this exactly
+the way `cmd_scenario.go`'s/`cmd_suite.go`'s Phase 6 composition already
+does: it opens the library (`library.Open`) and calls
+`library.CheckFingerprint` once per distinct fingerprint the loaded report
+names, building the `policy.LibraryLookups` map `policy.Evaluate` consumes —
+`internal/policy` itself never imports `internal/library` and never opens a
+store. See [`policy-evaluation.md`](policy-evaluation.md) for the full
+design: the IGP v0.1 document format, the two `incidentdna policy`
+subcommands, the exit-code contract, resource limits, and what this phase
+explicitly does not provide.
+
 ## CLI conventions
 
 - **Exit codes**: `0` success; `1` I/O, parse, or usage error; `2` semantic
@@ -313,6 +375,11 @@ provide.
   derive every listed-scenario filesystem path from a suite manifest's own
   declared `scenarios[].path` entries, each re-checked to resolve within the
   manifest's own directory — see [`scenario-suites.md`](scenario-suites.md).
+  `policy verify`/`evaluate` open exactly the policy file, and (for
+  `evaluate`) the `--scenario-report`/`--suite-report` file, given directly
+  on the command line — `internal/policy` never derives a filesystem path
+  from any document-supplied field — see
+  [`policy-evaluation.md`](policy-evaluation.md).
 
 ## Rejected alternatives
 
@@ -370,4 +437,12 @@ cross-reference" gap specifically — one new function
 entirely at the `cmd/incidentdna` layer — but it still does not build
 release gating, and `internal/scenario`/`internal/suite` remain unaware the
 incident library exists. See [`library-crossref.md`](library-crossref.md),
-"What Phase 6 explicitly does not provide."
+"What Phase 6 explicitly does not provide." `internal/policy` (Phase 7)
+closes the "declared, reviewable acceptance criteria evaluated
+automatically" gap specifically — a new, sixth parallel leaf package built
+entirely on Phase 4/5's existing `Report` struct definitions and Phase 6's
+existing `library.CheckFingerprint`, without any change to any of them —
+but it still does not build CI/CD integration, fresh execution, more than
+two rule types, or batch evaluation. See
+[`policy-evaluation.md`](policy-evaluation.md), "What Phase 7 explicitly
+does not provide."

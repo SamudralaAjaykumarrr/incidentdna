@@ -1,11 +1,12 @@
 # Threat Model
 
 Scope: the `incidentdna` CLI and the `internal/*` libraries it's built on,
-as they exist at the end of Phase 6 — local file input, local file/stdout
+as they exist at the end of Phase 7 — local file input, local file/stdout
 output, a local content-addressed evidence store, a local incident library,
 a local, bounded, offline regression-scenario runner, a local, sequential,
-offline scenario-suite runner, and a read-only cross-reference between a
-scenario's/suite's declared fingerprint and the incident library. No
+offline scenario-suite runner, a read-only cross-reference between a
+scenario's/suite's declared fingerprint and the incident library, and a
+local, deterministic policy evaluator over an already-produced report. No
 network, no multi-user or multi-tenant concerns. Phase 4 introduced one new
 class of risk this scope statement did not previously need to cover: local
 process execution (see "Executable regression scenarios: local
@@ -17,7 +18,12 @@ launches is launched by the unchanged Phase 4 runner (see "Scenario suites:
 aggregated local process-execution risk (Phase 5)" below). Phase 6
 introduces no new class of risk either: it is read-only local filesystem
 I/O reusing already-reviewed lookup logic (see "Library cross-reference:
-read-only lookup risk (Phase 6)" below).
+read-only lookup risk (Phase 6)" below). Phase 7 introduces no new class of
+risk either: `internal/policy` never calls `exec.Command`, and every
+filesystem read it performs is either a local file named directly on the
+command line or the identical read-only `library.CheckFingerprint` lookup
+Phase 6 already reviewed (see "Local policy evaluation: read-only local
+computation risk (Phase 7)" below).
 
 ## Maliciously modified incident documents
 
@@ -412,6 +418,41 @@ caps how many distinct fingerprints one `suite verify --library` invocation
 can look up; no new resource limit is introduced. See
 [`library-crossref.md`](library-crossref.md) for the full design.
 
+## Local policy evaluation: read-only local computation risk (Phase 7)
+
+Phase 7 introduces no new category of risk: `internal/policy` performs
+local file reads only — a policy file, an already-produced report file
+(`--scenario-report`/`--suite-report`), and, via `cmd/incidentdna`'s
+composition, the identical read-only `library.CheckFingerprint` lookup
+"Library cross-reference: read-only lookup risk (Phase 6)" above already
+documents. `internal/policy` never calls `exec.Command`, never calls
+`scenario.Run`/`suite.Run`, and does not even parse a scenario or suite
+*document* — only an already-produced report *artifact*. No new write path
+exists anywhere in this phase beyond an optional, caller-named `--report
+<path>` file, the same class every prior `run`/`verify` command already
+has.
+
+The one new consideration, stated plainly rather than implied away: a
+policy document, and its evaluation result, could in principle be used by
+an operator to make a real release decision — but IncidentDNA's own role
+stops at printing a verdict and an exit code to local stdout/a local file;
+it never contacts, authenticates against, or blocks anything in an external
+system itself. This is identical in kind to the boundary `scenario run`'s
+and `suite run`'s own exit codes already establish — `policy evaluate`
+composes two already-reviewed read operations (a report-artifact parse and
+a library lookup) one layer higher, it does not introduce a new one.
+
+Resource exposure is bounded by four new, independent, fixed limits
+(`internal/policy/limits.go`): `MaxPolicyDocumentSize` (64 KiB),
+`MaxRulesPerPolicy` (20), `MaxReportDocumentSize` (256 MiB), and
+`MaxDistinctFingerprintsPerEvaluation` (100) — the last bounded by, and
+equal to, `suite.MaxScenariosPerSuite`, the identical reasoning already
+applied to `suite verify --library`. `MaxReportDocumentSize` is a
+genuinely new limit governing a kind of file (a report artifact) no prior
+phase ever read back in; every other Phase 1-6 limit is inherited
+unchanged. See [`policy-evaluation.md`](policy-evaluation.md) for the full
+design.
+
 ## Path traversal through CLI inputs
 
 `incidentdna validate/fingerprint/inspect` open exactly the file path(s)
@@ -456,6 +497,16 @@ scenario, the same "bounded, not sandboxed" limit stated above applies
 identically — nothing about running from inside a suite changes what an
 already-reviewed scenario's own declared command can read or write.
 
+`incidentdna policy verify`/`evaluate` similarly open exactly the policy
+file path, and (for `evaluate`) the `--scenario-report`/`--suite-report`
+file path, given directly on the command line — `internal/policy` never
+derives a filesystem path from any document-supplied field; the only other
+path it ever touches is the caller-named `--report` output path and,
+via `cmd/incidentdna`'s composition, the incident library root
+`scenario verify --library`/`suite verify --library` already read from
+(see "Local policy evaluation: read-only local computation risk (Phase 7)"
+above).
+
 ## Resource exhaustion from maliciously large documents
 
 `internal/idir.LoadFile` checks the file's size via `os.Stat` before opening
@@ -498,19 +549,20 @@ exists and refuses to proceed (non-zero exit, no write) unless `--force` is
 passed — verified in `cmd/incidentdna/cli_test.go` and manually in
 `phase-1-report.md`. No other subcommand writes any file.
 
-## Future multi-tenant risks (explicitly out of scope through Phase 6)
+## Future multi-tenant risks (explicitly out of scope through Phase 7)
 
 Phase 3's incident library, Phase 4's regression-scenario runner, Phase 5's
-scenario-suite runner, and Phase 6's library cross-reference are **local
-and single-user, not shared or multi-tenant** — the same trust boundary as
-the evidence store before them: no concept of a tenant, user account, or
-access-control layer of its own. Every invocation, including every
-`library`, `evidence`, `scenario`, and `suite` subcommand, operates on files
-(and, for `library`/`evidence`, a store) the invoking user already has
-filesystem access to. Risks that become relevant only if a shared/remote/
-multi-tenant incident library, evidence store, or scenario/suite execution
-service is built in a later phase — none of this exists today, and Phase 6
-explicitly does not build it (see [`product-scope.md`](product-scope.md)):
+scenario-suite runner, Phase 6's library cross-reference, and Phase 7's
+policy evaluator are **local and single-user, not shared or multi-tenant**
+— the same trust boundary as the evidence store before them: no concept of
+a tenant, user account, or access-control layer of its own. Every
+invocation, including every `library`, `evidence`, `scenario`, `suite`, and
+`policy` subcommand, operates on files (and, for `library`/`evidence`, a
+store) the invoking user already has filesystem access to. Risks that
+become relevant only if a shared/remote/multi-tenant incident library,
+evidence store, or scenario/suite/policy-evaluation service is built in a
+later phase — none of this exists today, and Phase 7 explicitly does not
+build it (see [`product-scope.md`](product-scope.md)):
 
 - Cross-tenant fingerprint/identity leakage (can one tenant infer another
   tenant's incident existed, from a shared fingerprint namespace?).

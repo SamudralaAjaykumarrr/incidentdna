@@ -165,6 +165,34 @@ design — the exact CLI output, the exit-code contract, suite-level
 fingerprint deduplication, and what is explicitly *not* covered (no release
 gating, no new document field, no mutation of the library).
 
+## Phase 7: local policy evaluation
+
+Phase 7 adds a small, reviewable, versioned policy document format — IGP
+v0.1 ("Incident Gate Policy") — and a local, deterministic evaluator
+(`incidentdna policy verify|evaluate`) that checks an already-produced
+`scenario run --report`/`suite run --report` JSON artifact (Phase 4/5,
+unchanged) against a declared policy and reports a `PASS`/`FAIL` verdict
+with a meaningful exit code. This closes the gap named as explicitly out of
+scope through Phase 6 — a declared, reviewable statement of "what counts as
+acceptable," evaluated automatically against an already-produced result — as
+a **local, deterministic, non-executing** evaluator: `policy evaluate` reads
+two local files and prints a verdict plus exit code; it never calls a
+webhook, a status-check API, or any other external system, and it never runs
+`scenario.Run`/`suite.Run` itself. Exactly two rule types exist in v0.1:
+`require_result` (the report's own top-level `result` field must equal a
+declared value) and `require_library_occurrence` (every distinct
+`linked_fingerprint` named in the report must have at least one recorded
+incident-library occurrence, via the unchanged Phase 6
+`library.CheckFingerprint`). `internal/policy` is a new, sixth parallel leaf
+package: it imports `internal/scenario`/`internal/suite` only for their
+existing `Report` struct definitions, and does not import `internal/library`
+at all — the library composition lives entirely in `cmd/incidentdna`, the
+identical discipline Phase 6 established. See
+[`docs/policy-evaluation.md`](docs/policy-evaluation.md) for the full
+design — the exact CLI output, the exit-code contract, the JSON verdict
+report format, and what is explicitly *not* covered (no CI/CD integration,
+no fresh execution, no boolean combinators, no batch evaluation).
+
 ## CLI commands
 
 ```
@@ -257,20 +285,39 @@ incidentdna suite run [--workspace-root <dir>] [--report <file>]
     the aggregate outcome as one deterministic JSON report to --report.
     --fail-fast stops after the first non-PASS scenario outcome, recording
     every scenario never reached as SKIPPED.
+
+incidentdna policy verify <policy-file>
+    Structurally/semantically validate <policy-file> against the IGP v0.1
+    rules (schema_version, non-empty rules, known rule type,
+    required/forbidden value per rule type, MaxRulesPerPolicy). Never
+    evaluates anything.
+
+incidentdna policy evaluate --policy <policy-file>
+                             (--scenario-report <file> | --suite-report <file>)
+                             [--library <dir>] [--report <file>]
+    Run the same checks as policy verify. If they pass, load the named
+    scenario/suite report file (unchanged Phase 4/5 JSON shape), evaluate
+    every declared rule against it, print a per-rule and overall verdict
+    line, and optionally write a deterministic JSON verdict report to
+    --report. require_library_occurrence is evaluated only if --library is
+    given; otherwise it is reported SKIP (never silently treated as
+    satisfied).
 ```
 
 Exit codes are meaningful and relied on by CI: `0` success, `1`
 I/O/parse/usage error, `2` semantic validation failure (or, for `evidence
 verify`/`evidence inspect`, a MISSING/CORRUPTED finding; for `library
 check`, no matching fingerprint found; for `scenario run`, a FAIL or
-TIMEOUT outcome; or, for `suite run`, an aggregate FAIL outcome). See
+TIMEOUT outcome; for `suite run`, an aggregate FAIL outcome; or, for
+`policy evaluate`, verdict FAIL). See
 [`docs/evidence-storage.md`](docs/evidence-storage.md),
 [`docs/incident-library.md`](docs/incident-library.md),
 [`docs/regression-scenarios.md`](docs/regression-scenarios.md),
-[`docs/scenario-suites.md`](docs/scenario-suites.md), and
-[`docs/library-crossref.md`](docs/library-crossref.md) for the full
-`evidence`, `library`, `scenario`, `suite`, and `--library` cross-reference
-command references.
+[`docs/scenario-suites.md`](docs/scenario-suites.md),
+[`docs/library-crossref.md`](docs/library-crossref.md), and
+[`docs/policy-evaluation.md`](docs/policy-evaluation.md) for the full
+`evidence`, `library`, `scenario`, `suite`, `--library` cross-reference, and
+`policy` command references.
 
 `incidentdna` performs no network access and collects no telemetry —
 every subcommand is pure local file I/O.
@@ -286,7 +333,7 @@ make lint     # gofmt -l check + go vet
 make test     # go test ./... -race -count=1
 make build    # go build -o bin/incidentdna ./cmd/incidentdna
 make example  # build, then validate + fingerprint examples/duplicate-payment/incident.yaml
-make verify   # lint + test + build + example + example-evidence + example-library + example-scenario + example-suite + example-library-crossref + golden fingerprint check
+make verify   # lint + test + build + example + example-evidence + example-library + example-scenario + example-suite + example-library-crossref + example-policy + golden fingerprint check
 make clean    # rm -rf bin
 ```
 
@@ -332,6 +379,7 @@ internal/evidence/     Local content-addressed evidence store + digest verificat
 internal/library/      Local incident library: occurrences grouped by fingerprint
 internal/scenario/     Local, bounded, offline regression-scenario runner (IRS v0.1)
 internal/suite/        Local, sequential, offline scenario suite runner (ISM v0.1)
+internal/policy/       Local, deterministic policy evaluation over an already-produced report (IGP v0.1)
 schemas/idir/v0.1/     Documentation-grade JSON Schema for the format
 examples/duplicate-payment/     Synthetic example used by tests and `make example`
 examples/evidence-storage-demo/ Separate synthetic example for `incidentdna evidence`
@@ -450,12 +498,12 @@ are in [`docs/threat-model.md`](docs/threat-model.md) and
 
 ```
 cmd/incidentdna/    CLI entrypoint and subcommands
-internal/           idir, validate, canonical, fingerprint, compare, evidence, library, scenario, suite packages
+internal/           idir, validate, canonical, fingerprint, compare, evidence, library, scenario, suite, policy packages
 schemas/idir/v0.1/  Documentation-grade JSON Schema for IDIR v0.1
 examples/           Synthetic example incident(s)
 testdata/golden/    Golden fingerprint and validation-rejection fixtures
 scripts/            Golden-fingerprint and demo verification scripts
-docs/               Architecture, IDIR spec, fingerprint design, evidence storage, incident library, regression scenarios, scenario suites, library cross-reference, threat model, privacy model, product scope
+docs/               Architecture, IDIR spec, fingerprint design, evidence storage, incident library, regression scenarios, scenario suites, library cross-reference, policy evaluation, threat model, privacy model, product scope
 Dockerfile.dev, compose.yaml, Makefile   Containerized dev/build/test workflow
 ```
 
@@ -472,15 +520,18 @@ top of all three, again without changing any of them. Phase 5 adds a local,
 sequential, offline scenario-suite runner on top of all four, again without
 changing any of them. Phase 6 adds a read-only, informational
 `--library` cross-reference on top of all five, changing only one function
-in `internal/library` and nothing else. Within that combined scope, the
-following limitations are by design — see
+in `internal/library` and nothing else. Phase 7 adds a local, deterministic
+policy evaluator (`internal/policy`, a new sixth parallel leaf package) on
+top of all six, again without changing any of them. Within that combined
+scope, the following limitations are by design — see
 [`docs/threat-model.md`](docs/threat-model.md),
 [`docs/privacy-model.md`](docs/privacy-model.md),
 [`docs/evidence-storage.md`](docs/evidence-storage.md),
 [`docs/incident-library.md`](docs/incident-library.md),
 [`docs/regression-scenarios.md`](docs/regression-scenarios.md),
-[`docs/scenario-suites.md`](docs/scenario-suites.md), and
-[`docs/library-crossref.md`](docs/library-crossref.md):
+[`docs/scenario-suites.md`](docs/scenario-suites.md),
+[`docs/library-crossref.md`](docs/library-crossref.md), and
+[`docs/policy-evaluation.md`](docs/policy-evaluation.md):
 
 - **No semantic tamper detection.** Validation checks internal coherence
   (no dangling refs, no cycles, required fields present), not whether a
@@ -544,6 +595,17 @@ following limitations are by design — see
   scenario/suite's own output) and an occurrence count, never any stored
   occurrence's content. See
   [`docs/library-crossref.md`](docs/library-crossref.md) for the full list.
+- **Policy evaluation is local, deterministic, and non-integrating.**
+  `policy evaluate` reads an already-produced `scenario run --report`/
+  `suite run --report` JSON file and an optional fresh library lookup,
+  prints a per-rule and overall `PASS`/`FAIL` verdict, and sets a meaningful
+  exit code — it never calls a webhook, a status-check API, or any other
+  external system, and never runs `scenario.Run`/`suite.Run` itself. Only
+  two rule types exist (`require_result`, `require_library_occurrence`); no
+  boolean combinators, numeric thresholds, or batch evaluation. The four
+  resource limits in `internal/policy/limits.go` are fixed, not
+  configurable. See [`docs/policy-evaluation.md`](docs/policy-evaluation.md)
+  for the full list.
 
 This codebase contains no React/web framework, no Kubernetes or cloud
 infrastructure, no Kafka or event-ingestion integration, no OpenTelemetry or
@@ -645,13 +707,37 @@ is not integrated with any other repository.
 - See [`docs/library-crossref.md`](docs/library-crossref.md) for the full
   design and its explicit limitations.
 
+**Implemented (Phase 7, this repository):**
+
+- A new, dedicated policy document format (IGP v0.1, `internal/policy/`,
+  a new sixth parallel leaf package) — loaded through its own size-capped
+  loader, deliberately not an extension of `scenario.Document`/
+  `suite.Document`
+- `incidentdna policy verify` / `evaluate`
+- Two rule types: `require_result` (the input report's own top-level
+  `result` field must equal a declared value) and
+  `require_library_occurrence` (every distinct `linked_fingerprint` in the
+  report must have a recorded incident-library occurrence, via the
+  unchanged Phase 6 `library.CheckFingerprint`)
+- A deterministic `PASS`/`FAIL` verdict with a meaningful exit code, and a
+  deterministic JSON verdict report (`--report`)
+- `internal/policy` never opens a library store itself — the
+  `require_library_occurrence` composition lives entirely in
+  `cmd/incidentdna`, mirroring Phase 6's discipline exactly; four fixed
+  resource limits
+- One new checked-in example policy, `policies/release-gate-example.yaml`
+- See [`docs/policy-evaluation.md`](docs/policy-evaluation.md) for the full
+  design and its explicit limitations.
+
 **Future work (not started, not scoped, not implemented in this codebase):**
 ingestion from observability/event systems, integration into release
 gating (including wiring the Phase 6 cross-reference's "no occurrences
-found" result into an actual CI/CD gate or merge check), sandboxed scenario
-execution, parallel suite execution, evidence/library signing or
-authenticity proof, remote/cloud storage for the evidence store, incident
-library, scenarios, or suites, and any of the other items listed as
+found" result, or the Phase 7 policy evaluator's own exit code/verdict,
+into an actual CI/CD gate or merge check), sandboxed scenario execution,
+parallel suite execution, evidence/library signing or authenticity proof,
+remote/cloud storage for the evidence store, incident library, scenarios,
+or suites, additional policy rule types (boolean combinators, numeric
+thresholds, per-scenario rules), and any of the other items listed as
 explicitly out of scope in [`docs/product-scope.md`](docs/product-scope.md).
 None of this exists yet; treat any description of it as forward-looking,
 not current capability.
