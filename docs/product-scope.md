@@ -263,9 +263,78 @@ cross-reference composition lives entirely in `cmd/incidentdna`, which
 already imported all three packages (`library`, `scenario`, `suite`)
 before Phase 6.
 
-## Explicitly out of scope for Phase 1 through Phase 6
+## Phase 7 scope
 
-This codebase, through the end of Phase 6, contains none of:
+Phase 7 builds directly on Phases 1 through 6, without changing any of
+them: a small, reviewable, versioned policy document format — **IGP v0.1**
+("Incident Gate Policy") — and a local, deterministic **evaluator**
+(`incidentdna policy verify`, `evaluate`) that checks an already-produced
+`scenario run --report`/`suite run --report` JSON artifact (Phase 4/5,
+unchanged) against a declared policy and reports a `PASS`/`FAIL` verdict
+with a meaningful exit code.
+
+This closes the gap this document previously named as explicitly out of
+scope through Phase 6 — a declared, reviewable statement of "what counts as
+acceptable," evaluated automatically against an already-produced result —
+**by deliberately splitting "release gating" into two distinct things**:
+
+1. **Release-gate / CI-CD *integration*** — IncidentDNA itself calling out
+   to, authenticating against, or blocking merges within some specific
+   external CI/CD platform. **This remains fully out of scope.**
+2. **Local, deterministic *policy evaluation* over already-produced
+   results** — this is the Phase 7 increment. `policy evaluate` reads two
+   local files (a policy document and an already-produced report artifact)
+   and an optional fresh library lookup, prints a verdict, and sets an exit
+   code — which some external system may then use to implement its own
+   gate, exactly the same "makes results available to be consumed by
+   something else, but IncidentDNA itself does not consume it into an
+   external system" boundary already accepted for `scenario run`'s and
+   `suite run`'s own exit codes.
+
+Concretely:
+
+- A new, dedicated policy document format (`internal/policy`, a new sixth
+  parallel leaf package), loaded through its own size-capped loader —
+  deliberately not an extension of `scenario.Document`/`suite.Document` and
+  not decoded through either package.
+- Two CLI subcommands: `incidentdna policy verify`, `evaluate`.
+- Exactly two rule types in v0.1: `require_result` (the input report's own
+  top-level `result` field must equal a declared value) and
+  `require_library_occurrence` (every distinct `linked_fingerprint` named
+  in the report must have at least one recorded incident-library
+  occurrence, checked via the unchanged Phase 6 `library.CheckFingerprint`).
+- `internal/policy` never calls `exec.Command`, never calls
+  `scenario.Run`/`suite.Run`, and does not parse a scenario or suite
+  *document* at all — it only parses an already-produced report *artifact*.
+- `internal/policy` never imports `internal/library` and does not know the
+  incident library exists — the `require_library_occurrence` rule is
+  evaluated against a caller-supplied lookup result; the composition that
+  opens the library and calls `library.CheckFingerprint` lives entirely in
+  `cmd/incidentdna`, the identical discipline Phase 6 established.
+- Strictly local and non-integrating: a `PASS`/`FAIL` verdict and a
+  deterministic JSON verdict report (`--report`) are the only outputs;
+  `policy evaluate` never calls a webhook, a status-check API, or any other
+  external system.
+- Four fixed resource limits (`MaxPolicyDocumentSize`,
+  `MaxRulesPerPolicy`, `MaxReportDocumentSize`,
+  `MaxDistinctFingerprintsPerEvaluation`) and no new resource limit on
+  `internal/scenario`, `internal/suite`, or `internal/library`.
+- One new checked-in example policy, `policies/release-gate-example.yaml`,
+  used by the demo script — not a new `examples/` directory, since Phase 7
+  introduces no new fixture content, only a small, reviewable config-shaped
+  file.
+
+Full design in [`policy-evaluation.md`](policy-evaluation.md). Phase 7 does
+not change `idir.Document`, the JSON Schema, `internal/validate`'s rules,
+`internal/canonical`, `internal/fingerprint`, `internal/compare`,
+`internal/evidence`, `internal/library`, `internal/scenario`, or
+`internal/suite` — the policy evaluator operates strictly on a new, separate
+document format and, for the report artifact it evaluates, Phase 4/5's
+already-existing, unchanged `Report` struct definitions.
+
+## Explicitly out of scope for Phase 1 through Phase 7
+
+This codebase, through the end of Phase 7, contains none of:
 
 - React, FastAPI, or any web/API framework.
 - Kubernetes or any cloud infrastructure.
@@ -277,9 +346,24 @@ This codebase, through the end of Phase 6, contains none of:
 - Any changes to, or reuse of, the separate OmniFlow repository.
 - Release gating, release-gate integration, or CI/CD blocking of any kind —
   `incidentdna library check` is an offline lookup command, not a gate, and
-  `incidentdna scenario run`'s and `incidentdna suite run`'s exit code/JSON
-  report are available to be consumed by something else but are not wired
-  into any gate by this codebase.
+  `incidentdna scenario run`'s, `incidentdna suite run`'s, and `incidentdna
+  policy evaluate`'s exit codes/JSON reports are available to be consumed by
+  something else but are not wired into any gate by this codebase. This is
+  the explicit split Phase 7 made and restates rather than resolves: "local,
+  deterministic policy evaluation over already-produced results" (built,
+  see "Phase 7 scope" above) is a distinct thing from "IncidentDNA itself
+  calling out to, authenticating against, or blocking merges within some
+  specific external CI/CD platform" (still fully out of scope).
+- **More than two policy rule types.** IGP v0.1 supports exactly
+  `require_result` and `require_library_occurrence`; arbitrary boolean
+  combinators, numeric thresholds on counts, and per-scenario (as opposed to
+  per-report) rules are not built.
+- **`policy evaluate` executing anything.** It reads an already-produced
+  report file; it never itself invokes `scenario.Run`/`suite.Run` — an
+  operator must run `scenario run --report`/`suite run --report` themselves
+  first, as an explicit prior step.
+- **Batch policy evaluation.** `policy evaluate` takes exactly one policy
+  file and exactly one report file per invocation.
 - **Directory-walk or glob-based scenario discovery**: `incidentdna suite`
   lists scenarios explicitly, by declared relative path; `incidentdna`
   itself never walks a directory tree looking for scenario files.
@@ -322,12 +406,15 @@ This codebase, through the end of Phase 6, contains none of:
 These are all real future needs (see [`phase-1-report.md`](phase-1-report.md),
 "Recommended Phase 2 scope", [`phase-2-plan.md`](phase-2-plan.md) §16,
 [`phase-3-plan.md`](phase-3-plan.md) §4, [`phase-4-plan.md`](phase-4-plan.md)
-§3/§27/§28, and [`phase-5-plan.md`](phase-5-plan.md) §3/§25/§26), but each
-phase's job is to get its own layer's guarantees right — Phase 1 the
-document representation, Phase 2 local evidence integrity, Phase 3 local
-occurrence storage and lookup, Phase 4 local, bounded, reviewed-command
-execution, Phase 5 local, sequential, aggregated execution of many already-
-reviewed scenarios — before anything further is built on top.
+§3/§27/§28, [`phase-5-plan.md`](phase-5-plan.md) §3/§25/§26, and
+[`phase-7-plan.md`](phase-7-plan.md) §22), but each phase's job is to get
+its own layer's guarantees right — Phase 1 the document representation,
+Phase 2 local evidence integrity, Phase 3 local occurrence storage and
+lookup, Phase 4 local, bounded, reviewed-command execution, Phase 5 local,
+sequential, aggregated execution of many already-reviewed scenarios, Phase
+6 read-only cross-reference between execution results and the incident
+library, Phase 7 local, deterministic policy evaluation over an
+already-produced result — before anything further is built on top.
 
 ## Why this order
 

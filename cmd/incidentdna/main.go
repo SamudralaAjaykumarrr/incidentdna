@@ -40,6 +40,7 @@ var commands = []command{
 	{"library", runLibrary},
 	{"scenario", runScenario},
 	{"suite", runSuite},
+	{"policy", runPolicy},
 }
 
 func main() {
@@ -122,6 +123,11 @@ Usage:
       every scenario it lists, or run them all sequentially, in declared
       order, and report the aggregate PASS/FAIL result. Run
       "incidentdna suite help" for subcommand details.
+  incidentdna policy <verify|evaluate> ...
+      Local policy evaluation (IGP v0.1): verify a policy document, or
+      evaluate an already-produced scenario/suite report against one and
+      report a PASS/FAIL verdict. Run "incidentdna policy help" for
+      subcommand details.
 
 incidentdna performs no network access and collects no telemetry.
 `)

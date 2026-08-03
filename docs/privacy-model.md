@@ -223,23 +223,56 @@ verify`:
   scenario/suite author who wants a fingerprint to show up as "found" must
   still run `incidentdna library add` themselves, exactly as before Phase 6.
 
-## What Phase 1 through Phase 6 do not do
+## Local policy evaluation privacy implications (Phase 7)
+
+Phase 7 adds a local, deterministic policy evaluator (see
+[`policy-evaluation.md`](policy-evaluation.md)) that reads an
+already-produced scenario/suite report and an optional fresh library lookup,
+exposed via `incidentdna policy verify`/`evaluate`:
+
+- **No new document field, no new persisted data on any existing type.** A
+  policy document is new, but carries no privacy/redaction block — for the
+  identical reason a scenario or suite document carries none: it is
+  short-lived, reviewable acceptance-criteria metadata, not a permanent
+  incident record.
+- **No new content is ever printed beyond what the input report and the
+  Phase 6 library lookup already expose.** The verdict output prints a
+  report's own `result` field (already visible in that report's own
+  stdout/JSON) and a fingerprint occurrence count (already the exact
+  content `scenario verify --library`/`suite verify --library` print) —
+  never a stored library occurrence's content, never raw captured
+  stdout/stderr excerpts from the underlying report beyond what a
+  `require_result` mismatch's `detail` string states (the declared vs.
+  actual `result` value only).
+- **No network access means no telemetry, no external transmission** —
+  restating the unconditional project invariant, extended to the one new
+  `internal/policy` package and `cmd/incidentdna` -> `internal/policy` call
+  path this phase adds.
+- **No mutation of the library.** `policy evaluate` never calls
+  `library.Add`; the only library operation it triggers (via
+  `cmd/incidentdna`, when `require_library_occurrence` is declared) is the
+  same read-only `library.CheckFingerprint` Phase 6 already introduced.
+
+## What Phase 1 through Phase 7 do not do
 
 - No automatic redaction — nothing in this codebase removes or masks
   sensitive content; validation only checks that an author's manual
   redaction was complete against the known-location list.
 - No PII detection across the whole document, or across stored evidence
-  file content, stored library occurrences, or scenario/suite execution
-  output/reports — only the specific document fields listed above.
+  file content, stored library occurrences, or scenario/suite/policy
+  execution output/reports — only the specific document fields listed
+  above.
 - No encryption at rest or in transit — for IDIR documents, stored evidence
-  bytes, stored library occurrences, or scenario/suite documents/workspaces/
-  reports.
+  bytes, stored library occurrences, or scenario/suite/policy
+  documents/workspaces/reports.
 - No data retention or deletion policy — for IDIR documents, the evidence
   store, or the incident library. (Scenario and suite workspaces are
   removed by default after each run, as stated above — a different,
   narrower behavior than "no retention policy," since there is nothing
   durable to retain in the first place unless
-  `--keep-workspace`/`--keep-workspaces`/`--report` is explicitly used.)
+  `--keep-workspace`/`--keep-workspaces`/`--report` is explicitly used. A
+  policy verdict report is not durable at all unless `--report` is
+  explicitly given.)
 - No signing or authenticity proof for a library occurrence — its presence
   in the library, and a passing integrity check, prove internal
   self-consistency only, never that the incident is truthful or who added

@@ -1,0 +1,22 @@
+# IncidentDNA IGP v0.1 policy document — synthetic example.
+#
+# A reviewable, checked-in example policy used by scripts/verify-policy-demo.sh
+# and docs/policy-evaluation.md: requires the evaluated report's own result
+# to be PASS, and requires every distinct linked_fingerprint named in it to
+# already have at least one recorded incident-library occurrence. See
+# docs/policy-evaluation.md for what each rule means and how to run this
+# against a real scenario/suite report.
+schema_version: policy/v0.1
+
+policy:
+  id: default-release-gate
+  title: Require every listed scenario to pass and be a recorded failure class
+  description: >
+    Blocks a release if the referenced report's own result was not PASS, or
+    if any distinct linked fingerprint among its scenarios has no recorded
+    incident-library occurrence.
+
+rules:
+  - type: require_result
+    value: PASS
+  - type: require_library_occurrence
