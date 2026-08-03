@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/SamudralaAjaykumarrr/incidentdna/internal/library"
 	"github.com/SamudralaAjaykumarrr/incidentdna/internal/scenario"
 )
 
@@ -51,14 +52,20 @@ verify a scenario document, or run its declared command in a bounded,
 offline, local workspace.
 
 Usage:
-  incidentdna scenario verify [--source <incident-file>] <scenario-file>
+  incidentdna scenario verify [--source <incident-file>] [--library <dir>]
+                               <scenario-file>
       Structurally/semantically validate <scenario-file> against the IRS
       v0.1 rules. Never executes anything. If --source is given,
       additionally load, validate, and fingerprint <incident-file> through
       the unchanged Phase 1 pipeline and assert the result equals the
-      scenario's declared linked_fingerprint.
+      scenario's declared linked_fingerprint. If --library is given, after
+      the above checks pass, additionally look up the scenario's own
+      linked_fingerprint against the named (or default) incident library and
+      print whether it has one or more recorded occurrences — purely
+      informational, never affecting the exit code below.
         exit 0 — valid (and, with --source, linked_fingerprint matches)
-        exit 1 — I/O/parse/usage error
+        exit 1 — I/O/parse/usage error, or (with --library) a malformed or
+                 unreadable library
         exit 2 — decodes but fails a semantic rule, or a --source mismatch
   incidentdna scenario run [--workspace <dir>] [--report <file>]
                             [--keep-workspace] <scenario-file>
@@ -88,8 +95,9 @@ docs/regression-scenarios.md, "Safety model".
 func runScenarioVerify(ctx context.Context, args []string) int {
 	fs := flag.NewFlagSet("scenario verify", flag.ContinueOnError)
 	source := fs.String("source", "", "incident file to cross-check the scenario's linked_fingerprint against")
+	libDir := libraryFlag(fs)
 	fs.Usage = func() {
-		fmt.Fprintln(os.Stderr, "usage: incidentdna scenario verify [--source <incident-file>] <scenario-file>")
+		fmt.Fprintln(os.Stderr, "usage: incidentdna scenario verify [--source <incident-file>] [--library <dir>] <scenario-file>")
 	}
 	if err := fs.Parse(args); err != nil {
 		return exitError
@@ -99,6 +107,18 @@ func runScenarioVerify(ctx context.Context, args []string) int {
 		return exitError
 	}
 	path := fs.Arg(0)
+
+	// libraryGiven distinguishes "--library was not passed at all" (Phase 6's
+	// cross-reference lookup never runs, byte-for-byte identical output to
+	// pre-Phase-6 behavior) from "--library was explicitly passed" (even with
+	// an empty value, which resolves to library.DefaultLibraryRoot) —
+	// docs/phase-6-plan.md §7 point 4/§9.
+	libraryGiven := false
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "library" {
+			libraryGiven = true
+		}
+	})
 
 	doc, err := scenario.LoadFile(path)
 	if err != nil {
@@ -118,22 +138,55 @@ func runScenarioVerify(ctx context.Context, args []string) int {
 	fmt.Printf("Scenario: %s (schema %s)\n", doc.Scenario.ID, doc.SchemaVersion)
 	fmt.Printf("Linked fingerprint: %s\n", doc.LinkedFingerprint)
 
-	if *source == "" {
-		fmt.Println("OK: scenario is structurally valid")
-		return exitOK
+	okSuffix := "OK: scenario is structurally valid"
+	if *source != "" {
+		srcRes, err := scenario.CheckSourceFingerprint(ctx, *source, doc.LinkedFingerprint)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "incidentdna: %v\n", err)
+			return exitError
+		}
+		fmt.Printf("Source fingerprint: %s\n", srcRes.SourceFingerprint)
+		if !srcRes.Match {
+			fmt.Fprintf(os.Stderr, "incidentdna: linked_fingerprint does not match the fingerprint computed from --source %s\n", *source)
+			return exitValidationError
+		}
+		okSuffix = "OK: scenario is structurally valid and its linked_fingerprint matches --source"
 	}
 
-	srcRes, err := scenario.CheckSourceFingerprint(ctx, *source, doc.LinkedFingerprint)
+	if libraryGiven {
+		if code := printScenarioLibraryCrossReference(ctx, *libDir, doc.LinkedFingerprint); code != exitOK {
+			return code
+		}
+	}
+
+	fmt.Println(okSuffix)
+	return exitOK
+}
+
+// printScenarioLibraryCrossReference implements docs/phase-6-plan.md §9's
+// scenario verify --library behavior: a pure, read-only lookup of fp against
+// the named (or default) incident library, printed as a single informational
+// "Library:" line. It never returns exitValidationError — a "no occurrences
+// found" result is informational only (§3) — but a malformed/unreadable
+// library maps to exitError, the same "environmental failure" class every
+// other exit-1 cause in this codebase already belongs to (§10/§11).
+func printScenarioLibraryCrossReference(ctx context.Context, libDir, fp string) int {
+	st, code := openLibraryStore(libDir)
+	if code != exitOK {
+		return code
+	}
+
+	res, err := library.CheckFingerprint(ctx, st, fp)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "incidentdna: %v\n", err)
 		return exitError
 	}
-	fmt.Printf("Source fingerprint: %s\n", srcRes.SourceFingerprint)
-	if !srcRes.Match {
-		fmt.Fprintf(os.Stderr, "incidentdna: linked_fingerprint does not match the fingerprint computed from --source %s\n", *source)
-		return exitValidationError
+
+	if res.Outcome == library.CheckOutcomeMatch {
+		fmt.Printf("Library: %d occurrence(s) found for this fingerprint\n", res.MatchCount)
+	} else {
+		fmt.Println("Library: no occurrences found for this fingerprint (not yet recorded in the library)")
 	}
-	fmt.Println("OK: scenario is structurally valid and its linked_fingerprint matches --source")
 	return exitOK
 }
 

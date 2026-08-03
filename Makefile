@@ -1,4 +1,4 @@
-.PHONY: format lint test build example example-evidence example-library example-scenario example-suite verify clean
+.PHONY: format lint test build example example-evidence example-library example-scenario example-suite example-library-crossref verify clean
 
 # Every target runs inside the dev container defined by Dockerfile.dev /
 # compose.yaml, so a contributor never needs Go installed on the host.
@@ -64,7 +64,19 @@ example-scenario: build
 example-suite: build
 	$(RUN) sh scripts/verify-suite-demo.sh
 
-verify: lint test build example example-evidence example-library example-scenario example-suite
+# Phase 6: end-to-end check of the `--library` cross-reference flag on
+# `incidentdna scenario verify` and `incidentdna suite verify`, composing
+# already-existing fixtures from examples/duplicate-payment/,
+# examples/regression-scenario-demo/, and examples/regression-suite-demo/
+# (no new example directory — Phase 6 introduces no new document format),
+# using temporary --library directories (never the default
+# .incidentdna/library/objects) so this never leaves generated output in
+# the repository. See scripts/verify-library-crossref-demo.sh and
+# docs/library-crossref.md.
+example-library-crossref: build
+	$(RUN) sh scripts/verify-library-crossref-demo.sh
+
+verify: lint test build example example-evidence example-library example-scenario example-suite example-library-crossref
 	$(RUN) sh scripts/verify-golden-fingerprint.sh
 
 clean:

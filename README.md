@@ -145,6 +145,26 @@ without touching `examples/duplicate-payment/`,
 `examples/evidence-storage-demo/`, `examples/incident-library-demo/`, or
 `examples/regression-scenario-demo/`.
 
+## Phase 6: library cross-reference
+
+Phase 6 adds a read-only, purely informational cross-reference between a
+scenario's (or a suite's) declared `linked_fingerprint` and the incident
+library's stored occurrences, exposed as an optional `--library <dir>` flag
+on `incidentdna scenario verify` and `incidentdna suite verify`. This closes
+the gap named as explicitly out of scope through Phase 5 — automatic
+coupling between a scenario's/suite's fingerprint and library
+occurrences — as a **read-only, verify-only, non-gating** lookup: a "no
+occurrences found" result is printed, never enforced, and `scenario
+run`/`suite run` are entirely unchanged. The only code change to an
+existing package is one new exported function,
+`internal/library.CheckFingerprint`; `internal/scenario` and
+`internal/suite` are not modified and gain no new import — the composition
+lives entirely in `cmd/incidentdna`. See
+[`docs/library-crossref.md`](docs/library-crossref.md) for the full
+design — the exact CLI output, the exit-code contract, suite-level
+fingerprint deduplication, and what is explicitly *not* covered (no release
+gating, no new document field, no mutation of the library).
+
 ## CLI commands
 
 ```
@@ -201,12 +221,15 @@ incidentdna library list [--library <dir>]
     application/service, occurred timestamp) — never the full stored
     document.
 
-incidentdna scenario verify [--source <incident-file>] <scenario-file>
+incidentdna scenario verify [--source <incident-file>] [--library <dir>] <scenario-file>
     Structurally/semantically validate <scenario-file> against the IRS v0.1
     rules. Never executes anything. If --source is given, additionally
     validate and fingerprint <incident-file> through the unchanged Phase 1
     pipeline and assert the result equals the scenario's declared
-    linked_fingerprint.
+    linked_fingerprint. If --library is given, after the above checks pass,
+    look up the scenario's own linked_fingerprint against the incident
+    library and print whether it has recorded occurrences (informational
+    only; never affects the exit code).
 
 incidentdna scenario run [--workspace <dir>] [--report <file>]
                           [--keep-workspace] <scenario-file>
@@ -217,11 +240,14 @@ incidentdna scenario run [--workspace <dir>] [--report <file>]
     TIMEOUT, INVALID, or INTERNAL_ERROR, and optionally writes a
     deterministic JSON execution report to --report.
 
-incidentdna suite verify <suite-file>
+incidentdna suite verify [--library <dir>] <suite-file>
     Structurally/semantically validate <suite-file> against the ISM v0.1
     rules, then load and validate every listed scenario file against the
     existing IRS v0.1 rules (scenario.Validate, unchanged). Never executes
-    anything.
+    anything. If --library is given, after the above checks pass, look up
+    every distinct linked_fingerprint among the listed scenarios against
+    the incident library, annotate each scenario line, and print an
+    aggregate count (informational only; never affects the exit code).
 
 incidentdna suite run [--workspace-root <dir>] [--report <file>]
                        [--keep-workspaces] [--fail-fast] <suite-file>
@@ -240,9 +266,11 @@ check`, no matching fingerprint found; for `scenario run`, a FAIL or
 TIMEOUT outcome; or, for `suite run`, an aggregate FAIL outcome). See
 [`docs/evidence-storage.md`](docs/evidence-storage.md),
 [`docs/incident-library.md`](docs/incident-library.md),
-[`docs/regression-scenarios.md`](docs/regression-scenarios.md), and
-[`docs/scenario-suites.md`](docs/scenario-suites.md) for the full
-`evidence`, `library`, `scenario`, and `suite` command references.
+[`docs/regression-scenarios.md`](docs/regression-scenarios.md),
+[`docs/scenario-suites.md`](docs/scenario-suites.md), and
+[`docs/library-crossref.md`](docs/library-crossref.md) for the full
+`evidence`, `library`, `scenario`, `suite`, and `--library` cross-reference
+command references.
 
 `incidentdna` performs no network access and collects no telemetry —
 every subcommand is pure local file I/O.
@@ -258,7 +286,7 @@ make lint     # gofmt -l check + go vet
 make test     # go test ./... -race -count=1
 make build    # go build -o bin/incidentdna ./cmd/incidentdna
 make example  # build, then validate + fingerprint examples/duplicate-payment/incident.yaml
-make verify   # lint + test + build + example + example-evidence + example-library + example-scenario + example-suite + golden fingerprint check
+make verify   # lint + test + build + example + example-evidence + example-library + example-scenario + example-suite + example-library-crossref + golden fingerprint check
 make clean    # rm -rf bin
 ```
 
@@ -427,7 +455,7 @@ schemas/idir/v0.1/  Documentation-grade JSON Schema for IDIR v0.1
 examples/           Synthetic example incident(s)
 testdata/golden/    Golden fingerprint and validation-rejection fixtures
 scripts/            Golden-fingerprint and demo verification scripts
-docs/               Architecture, IDIR spec, fingerprint design, evidence storage, incident library, regression scenarios, scenario suites, threat model, privacy model, product scope
+docs/               Architecture, IDIR spec, fingerprint design, evidence storage, incident library, regression scenarios, scenario suites, library cross-reference, threat model, privacy model, product scope
 Dockerfile.dev, compose.yaml, Makefile   Containerized dev/build/test workflow
 ```
 
@@ -442,13 +470,17 @@ grouped by fingerprint, with lookup — on top of both, again without changing
 either. Phase 4 adds a local, bounded, offline regression-scenario runner on
 top of all three, again without changing any of them. Phase 5 adds a local,
 sequential, offline scenario-suite runner on top of all four, again without
-changing any of them. Within that combined scope, the following limitations
-are by design — see [`docs/threat-model.md`](docs/threat-model.md),
+changing any of them. Phase 6 adds a read-only, informational
+`--library` cross-reference on top of all five, changing only one function
+in `internal/library` and nothing else. Within that combined scope, the
+following limitations are by design — see
+[`docs/threat-model.md`](docs/threat-model.md),
 [`docs/privacy-model.md`](docs/privacy-model.md),
 [`docs/evidence-storage.md`](docs/evidence-storage.md),
 [`docs/incident-library.md`](docs/incident-library.md),
-[`docs/regression-scenarios.md`](docs/regression-scenarios.md), and
-[`docs/scenario-suites.md`](docs/scenario-suites.md):
+[`docs/regression-scenarios.md`](docs/regression-scenarios.md),
+[`docs/scenario-suites.md`](docs/scenario-suites.md), and
+[`docs/library-crossref.md`](docs/library-crossref.md):
 
 - **No semantic tamper detection.** Validation checks internal coherence
   (no dangling refs, no cycles, required fields present), not whether a
@@ -496,11 +528,22 @@ are by design — see [`docs/threat-model.md`](docs/threat-model.md),
   `incidentdna suite run` executes every scenario a manifest explicitly
   lists, sequentially, in declared order, via the unchanged Phase 4 runner
   — there is no directory-walk or glob-based discovery, no parallel
-  execution, and no automatic coupling to the incident library. Its exit
-  code and JSON report are not wired into any CI/CD pipeline or merge check
-  by this codebase. The three resource limits in
-  `internal/suite/limits.go` are fixed, not configurable. See
+  execution, and no automatic coupling to the incident library as part of
+  `suite run` itself. Its exit code and JSON report are not wired into any
+  CI/CD pipeline or merge check by this codebase. The three resource limits
+  in `internal/suite/limits.go` are fixed, not configurable. See
   [`docs/scenario-suites.md`](docs/scenario-suites.md) for the full list.
+- **The library cross-reference is read-only, verify-only, and non-gating.**
+  `scenario verify --library`/`suite verify --library` report whether the
+  incident library holds occurrences under a declared `linked_fingerprint`,
+  but never enforce anything: a "no occurrences found" result never changes
+  either command's exit code, `scenario run`/`suite run` are entirely
+  unchanged, and `internal/scenario`/`internal/suite` still do not import or
+  query `internal/library` — the lookup is composed entirely in
+  `cmd/incidentdna`. It reveals only a fingerprint (already visible in the
+  scenario/suite's own output) and an occurrence count, never any stored
+  occurrence's content. See
+  [`docs/library-crossref.md`](docs/library-crossref.md) for the full list.
 
 This codebase contains no React/web framework, no Kubernetes or cloud
 infrastructure, no Kafka or event-ingestion integration, no OpenTelemetry or
@@ -585,15 +628,33 @@ is not integrated with any other repository.
 - See [`docs/scenario-suites.md`](docs/scenario-suites.md) for the full
   design, the safety model, and its explicit limitations.
 
+**Implemented (Phase 6, this repository):**
+
+- One new exported function, `internal/library.CheckFingerprint` (plus one
+  new sentinel error, `ErrInvalidFingerprint`) — the only change to an
+  existing package; `internal/scenario` and `internal/suite` are unmodified
+- `incidentdna scenario verify --library <dir>` and
+  `incidentdna suite verify --library <dir>`: a read-only, purely
+  informational lookup of a declared `linked_fingerprint` against the
+  incident library, printed but never affecting either command's exit code
+- Suite-level deduplication: distinct `linked_fingerprint` values among a
+  suite's listed scenarios are looked up at most once each, in
+  first-occurrence declared order
+- `scenario run` and `suite run` entirely unchanged — no new flag, no new
+  exit-code cause, no new report field
+- See [`docs/library-crossref.md`](docs/library-crossref.md) for the full
+  design and its explicit limitations.
+
 **Future work (not started, not scoped, not implemented in this codebase):**
 ingestion from observability/event systems, integration into release
-gating, automatic cross-referencing of a scenario's (or a suite's)
-`linked_fingerprint` against incident library occurrences, parallel suite
-execution, evidence/library signing or authenticity proof, remote/cloud
-storage for the evidence store, incident library, scenarios, or suites, and
-any of the other items listed as explicitly out of scope in
-[`docs/product-scope.md`](docs/product-scope.md). None of this exists yet;
-treat any description of it as forward-looking, not current capability.
+gating (including wiring the Phase 6 cross-reference's "no occurrences
+found" result into an actual CI/CD gate or merge check), sandboxed scenario
+execution, parallel suite execution, evidence/library signing or
+authenticity proof, remote/cloud storage for the evidence store, incident
+library, scenarios, or suites, and any of the other items listed as
+explicitly out of scope in [`docs/product-scope.md`](docs/product-scope.md).
+None of this exists yet; treat any description of it as forward-looking,
+not current capability.
 
 ## Contributing and development
 

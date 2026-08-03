@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/SamudralaAjaykumarrr/incidentdna/internal/library"
+	"github.com/SamudralaAjaykumarrr/incidentdna/internal/scenario"
 	"github.com/SamudralaAjaykumarrr/incidentdna/internal/suite"
 )
 
@@ -51,14 +53,20 @@ manifest and every scenario it lists, or run them all sequentially and
 report the aggregate result.
 
 Usage:
-  incidentdna suite verify <suite-file>
+  incidentdna suite verify [--library <dir>] <suite-file>
       Structurally/semantically validate <suite-file> against the ISM v0.1
       rules (schema_version, non-empty scenarios list, path safety,
       duplicate-path rejection, aggregate timeout bound), then load and
       validate every listed scenario file against the existing IRS v0.1
-      rules. Never executes anything.
+      rules. Never executes anything. If --library is given, after the
+      above checks pass, look up every distinct linked_fingerprint among
+      the listed scenarios (first-occurrence order) against the named (or
+      default) incident library, annotate each scenario's own summary
+      line, and print a one-line aggregate count — purely informational,
+      never affecting the exit code below.
         exit 0 — suite manifest and every listed scenario are valid
-        exit 1 — I/O/parse/usage error
+        exit 1 — I/O/parse/usage error, or (with --library) a malformed or
+                 unreadable library
         exit 2 — decodes but fails a semantic rule, or a listed scenario is invalid
   incidentdna suite run [--workspace-root <dir>] [--report <file>]
                         [--keep-workspaces] [--fail-fast] <suite-file>
@@ -90,8 +98,9 @@ parallel. It performs no network access and collects no telemetry.
 
 func runSuiteVerify(ctx context.Context, args []string) int {
 	fs := flag.NewFlagSet("suite verify", flag.ContinueOnError)
+	libDir := libraryFlag(fs)
 	fs.Usage = func() {
-		fmt.Fprintln(os.Stderr, "usage: incidentdna suite verify <suite-file>")
+		fmt.Fprintln(os.Stderr, "usage: incidentdna suite verify [--library <dir>] <suite-file>")
 	}
 	if err := fs.Parse(args); err != nil {
 		return exitError
@@ -101,6 +110,18 @@ func runSuiteVerify(ctx context.Context, args []string) int {
 		return exitError
 	}
 	path := fs.Arg(0)
+
+	// libraryGiven distinguishes "--library was not passed at all" (Phase 6's
+	// cross-reference lookup never runs, byte-for-byte identical output to
+	// pre-Phase-6 behavior) from "--library was explicitly passed" — mirrors
+	// runScenarioVerify's identical handling (docs/phase-6-plan.md §7 point
+	// 4/§9).
+	libraryGiven := false
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "library" {
+			libraryGiven = true
+		}
+	})
 
 	doc, err := suite.LoadFile(path)
 	if err != nil {
@@ -112,6 +133,19 @@ func runSuiteVerify(ctx context.Context, args []string) int {
 
 	fmt.Printf("Suite: %s (schema %s)\n", doc.Suite.ID, doc.SchemaVersion)
 	fmt.Printf("Scenarios: %d listed\n", len(doc.Scenarios))
+
+	// The library cross-reference only ever runs "after the above checks
+	// pass" (§9): an invalid suite never triggers a library lookup, so its
+	// per-scenario lines are never annotated.
+	var libRes suiteLibraryResult
+	if libraryGiven && res.Valid() {
+		var code int
+		libRes, code = suiteLibraryCrossReference(ctx, *libDir, doc, filepath.Dir(path))
+		if code != exitOK {
+			return code
+		}
+	}
+
 	for _, sc := range res.Scenarios {
 		status := "OK"
 		if !sc.Valid {
@@ -121,7 +155,11 @@ func runSuiteVerify(ctx context.Context, args []string) int {
 		if label == "" {
 			label = sc.Path
 		}
-		fmt.Printf("  [%s] %s (%s)\n", status, label, sc.Path)
+		line := fmt.Sprintf("  [%s] %s (%s)", status, label, sc.Path)
+		if suffix, ok := libRes.annotations[sc.Path]; ok {
+			line += " " + suffix
+		}
+		fmt.Println(line)
 	}
 
 	if !res.Valid() {
@@ -137,8 +175,85 @@ func runSuiteVerify(ctx context.Context, args []string) int {
 		return exitValidationError
 	}
 
+	if libraryGiven {
+		fmt.Printf("Library cross-reference: %d of %d distinct linked fingerprint(s) have library occurrences\n", libRes.distinctWithOccurrences, libRes.distinctChecked)
+	}
+
 	fmt.Printf("OK: suite manifest and all %d listed scenarios are structurally valid\n", len(doc.Scenarios))
 	return exitOK
+}
+
+// suiteLibraryResult is the outcome of suiteLibraryCrossReference: a
+// per-listed-scenario-path annotation suffix, and the aggregate distinct-
+// fingerprint counts printed on the "Library cross-reference:" summary line.
+type suiteLibraryResult struct {
+	annotations             map[string]string
+	distinctChecked         int
+	distinctWithOccurrences int
+}
+
+// suiteLibraryCrossReference implements docs/phase-6-plan.md §9's suite
+// verify --library behavior: look up every *distinct* linked_fingerprint
+// among doc's listed scenarios against the named (or default) incident
+// library, in first-occurrence declared order, at most once per distinct
+// fingerprint (§7 point 3) — never once per listed scenario. Each listed
+// scenario is re-loaded via scenario.LoadFile (cheap, no execution) purely
+// to read its own already-validated linked_fingerprint field; internal/suite
+// itself is not modified and gains no new field or method (§3/§6).
+func suiteLibraryCrossReference(ctx context.Context, libDir string, doc *suite.Document, suiteDir string) (suiteLibraryResult, int) {
+	st, code := openLibraryStore(libDir)
+	if code != exitOK {
+		return suiteLibraryResult{}, code
+	}
+
+	annotations := make(map[string]string, len(doc.Scenarios))
+	cache := make(map[string]library.CheckResult)
+	order := make([]string, 0, len(doc.Scenarios))
+
+	for _, entry := range doc.Scenarios {
+		if err := ctx.Err(); err != nil {
+			fmt.Fprintf(os.Stderr, "incidentdna: library cross-reference canceled: %v\n", err)
+			return suiteLibraryResult{}, exitError
+		}
+
+		resolvedPath := filepath.Join(suiteDir, entry.Path)
+		sdoc, err := scenario.LoadFile(resolvedPath)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "incidentdna: re-loading %s for library cross-reference: %v\n", entry.Path, err)
+			return suiteLibraryResult{}, exitError
+		}
+
+		fp := sdoc.LinkedFingerprint
+		res, seen := cache[fp]
+		if !seen {
+			res, err = library.CheckFingerprint(ctx, st, fp)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "incidentdna: %v\n", err)
+				return suiteLibraryResult{}, exitError
+			}
+			cache[fp] = res
+			order = append(order, fp)
+		}
+
+		if res.Outcome == library.CheckOutcomeMatch {
+			annotations[entry.Path] = fmt.Sprintf("— library: %d occurrence(s)", res.MatchCount)
+		} else {
+			annotations[entry.Path] = "— library: no occurrences"
+		}
+	}
+
+	withOccurrences := 0
+	for _, fp := range order {
+		if cache[fp].Outcome == library.CheckOutcomeMatch {
+			withOccurrences++
+		}
+	}
+
+	return suiteLibraryResult{
+		annotations:             annotations,
+		distinctChecked:         len(order),
+		distinctWithOccurrences: withOccurrences,
+	}, exitOK
 }
 
 func runSuiteRun(ctx context.Context, args []string) int {

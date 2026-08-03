@@ -220,9 +220,52 @@ directly or indirectly — every process a suite launches is launched by
 `internal/scenario.Run`, unchanged — see
 [`scenario-suites.md`](scenario-suites.md), "No new class of risk."
 
-## Explicitly out of scope for Phase 1 through Phase 5
+## Phase 6 scope
 
-This codebase, through the end of Phase 5, contains none of:
+Phase 6 builds directly on Phases 1 through 5, without changing any of
+them except one small, additive change to `internal/library`: a read-only,
+purely informational **cross-reference** between a scenario's (or a
+suite's) declared `linked_fingerprint` and the incident library's stored
+occurrences. This closes the gap this document previously named as
+explicitly out of scope through Phase 5 — *"automatic coupling between a
+scenario's (or a suite's) `linked_fingerprint` and the incident library's
+stored occurrences"* — as a **read-only, verify-only, non-gating** lookup;
+release gating, sandboxed execution, remote storage, signing, and every
+other item still named below remain future work. Concretely:
+
+- One new exported function, `internal/library.CheckFingerprint`, and one
+  new sentinel error, `ErrInvalidFingerprint` — the only change to
+  `internal/library`, and the only package with any code change at all.
+  `internal/scenario` and `internal/suite` are not modified and gain no new
+  import.
+- An optional `--library <dir>` flag on `incidentdna scenario verify`: after
+  the existing structural/semantic (and optional `--source`) checks pass,
+  look up the scenario's own `linked_fingerprint` against the named (or
+  default) incident library and print whether it has recorded occurrences.
+- An optional `--library <dir>` flag on `incidentdna suite verify`: after
+  the existing checks pass, look up every *distinct* `linked_fingerprint`
+  among the listed scenarios (first-occurrence order), annotate each
+  scenario's own summary line, and print a one-line aggregate count.
+- Strictly informational: a "no occurrences found" result never changes
+  either command's existing 0/2 exit-code meaning; `scenario run` and `suite
+  run` are entirely unchanged — no new flag, no new exit-code cause, no new
+  report field.
+- No new document field anywhere, no mutation of the library, and no new
+  resource limit — bounded entirely by the existing
+  `suite.MaxScenariosPerSuite` (100) and `internal/library`'s own limits,
+  reused unchanged.
+
+Full design in [`library-crossref.md`](library-crossref.md). Phase 6 does
+not change `idir.Document`, the JSON Schema, `internal/validate`'s rules,
+`internal/canonical`, `internal/fingerprint`, `internal/compare`,
+`internal/evidence`, `internal/scenario`, or `internal/suite` — the
+cross-reference composition lives entirely in `cmd/incidentdna`, which
+already imported all three packages (`library`, `scenario`, `suite`)
+before Phase 6.
+
+## Explicitly out of scope for Phase 1 through Phase 6
+
+This codebase, through the end of Phase 6, contains none of:
 
 - React, FastAPI, or any web/API framework.
 - Kubernetes or any cloud infrastructure.
@@ -248,10 +291,14 @@ This codebase, through the end of Phase 5, contains none of:
   argv/env/cwd/timeout/output for the process it launches, but does not
   isolate it with seccomp, cgroups, a container, or a VM — the reviewed
   command runs with the full OS-level permissions of the invoking user.
-- Automatic coupling between a scenario's (or a suite's) `linked_fingerprint`
-  and the incident library's stored occurrences — neither
+- **Release-gate use of the Phase 6 library cross-reference.** Phase 6 (see
+  "Phase 6 scope" above) added an optional, read-only, informational
+  `--library` lookup to `scenario verify`/`suite verify` — but neither
   `internal/scenario` nor `internal/suite` imports or queries
-  `internal/library`.
+  `internal/library` themselves (the composition is entirely a
+  `cmd/incidentdna`-layer concern), and nothing in this codebase turns a
+  "no occurrences found" result into a blocking condition for `scenario
+  run`, `suite run`, or any external CI/CD gate.
 - Ingestion from observability/event systems — `library add` (like
   `evidence store` before it) takes a local file path given directly on the
   command line, never an ingested event; the same is true of `scenario

@@ -330,6 +330,43 @@ recorded `SKIPPED` in both the printed summary and the JSON report (with a
 always accounts for every listed scenario, whether it ran, passed, failed,
 or was skipped.
 
+## Library cross-reference (Phase 6)
+
+`suite verify` accepts an optional `--library <dir>` flag: after the
+existing checks pass, it looks up every *distinct* `linked_fingerprint`
+among the listed scenarios (in first-occurrence declared order) against the
+named (or default) incident library, annotates each scenario's own summary
+line, and prints a one-line aggregate count — purely informational, never
+affecting `suite verify`'s own exit code, and never touching `suite run` at
+all.
+
+```
+$ incidentdna suite verify --library .incidentdna/library/objects \
+    examples/regression-suite-demo/suite-mixed.yaml
+Suite: suite-demo-mixed (schema suite/v0.1)
+Scenarios: 3 listed
+  [OK] suite-demo-pass (scenarios/scenario-pass.yaml) — library: 1 occurrence(s)
+  [OK] suite-demo-fail (scenarios/scenario-fail.yaml) — library: 1 occurrence(s)
+  [OK] suite-demo-timeout (scenarios/scenario-timeout.yaml) — library: 1 occurrence(s)
+Library cross-reference: 1 of 1 distinct linked fingerprint(s) have library occurrences
+OK: suite manifest and all 3 listed scenarios are structurally valid
+```
+
+All three of `suite-mixed.yaml`'s listed scenarios happen to share the same
+checked-in `linked_fingerprint`, so this transcript directly demonstrates
+deduplication: three listed scenarios sharing one fingerprint trigger
+exactly **one** library lookup, not three — the aggregate line counts
+**distinct** fingerprints. This
+bounds `suite verify --library`'s library I/O to at most one lookup per
+distinct fingerprint, never per scenario entry, and is bounded overall by
+the existing `MaxScenariosPerSuite` (100). `--library` omitted is
+byte-for-byte identical to pre-Phase-6 output. This is implemented entirely
+at the `cmd/incidentdna` layer, calling the new `library.CheckFingerprint`
+directly, once per distinct fingerprint — `internal/suite` itself is not
+modified and gains no new import. See
+[`library-crossref.md`](library-crossref.md) for the full design, including
+the `scenario verify --library` equivalent.
+
 ## Privacy implications
 
 Identical in kind to Phase 4's own statement: a suite manifest carries no
@@ -352,8 +389,13 @@ control, restated rather than newly introduced.
   itself never walks a directory tree looking for scenario files.
 - **No parallel execution.** Scenarios in a suite run strictly sequentially,
   in declared order.
-- **No coupling to the incident library.** A suite manifest and its runner
-  do not query `internal/library`.
+- **No automatic coupling to the incident library.** A suite manifest and
+  its runner do not query `internal/library` as part of `suite run`, and
+  `internal/suite` itself still does not import or query `internal/library`.
+  As of Phase 6, `suite verify --library` offers an optional, read-only,
+  informational lookup for this — see "Library cross-reference (Phase 6)"
+  above — but it remains `verify`-only, non-gating, and implemented
+  entirely outside `internal/suite`.
 - **No new process-execution primitive.** `internal/suite` never calls
   `exec.Command` itself; it calls `internal/scenario.Run` once per listed
   scenario, unchanged.
