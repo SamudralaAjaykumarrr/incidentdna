@@ -283,13 +283,23 @@ states that plainly rather than implying a guarantee that isn't real:
   execution rather than newly discovered.
 - **Detached child processes escaping timeout enforcement.**
   `context`-based cancellation, combined with killing the child's whole
-  process group (`Setpgid` + a negative-PID `SIGKILL`), reliably terminates
-  the direct child and any children it spawned that remained in that
-  process group; a grandchild that double-forks or otherwise detaches from
-  the process group may survive past the timeout — documented as a known,
-  accepted gap, consistent with this project's stance that OS-level
-  guarantees beyond what Go's standard library provides are not
-  independently re-implemented.
+  process group, reliably terminates the direct child and any children it
+  spawned that remained in that group; a grandchild that detaches may
+  survive past the timeout — documented as a known, accepted gap,
+  consistent with this project's stance that OS-level guarantees beyond
+  what Go's standard library provides are not independently
+  re-implemented. The grouping mechanism is OS-specific
+  (`internal/scenario/run_unix.go`/`run_windows.go`, Phase 8): on Unix,
+  `Setpgid` plus a negative-PID `SIGKILL`, unchanged since Phase 4; on
+  Windows, a Job Object (`CreateJobObjectW`/`AssignProcessToJobObject`/
+  `TerminateJobObject`, called directly against `kernel32.dll` via
+  `syscall.NewLazyDLL` — standard library only, no new module dependency),
+  which the OS itself terminates as a unit, with the same "a process that
+  explicitly breaks away can escape" residual gap as the Unix case. Neither
+  mechanism opens a network connection, reads configuration, or otherwise
+  expands this tool's attack surface beyond direct, local process-tree
+  management — the same category of OS interaction `exec.Command` itself
+  already performs.
 - **No network access, no telemetry, from the runner's own code** —
   restated as unconditional and verified the same way every prior phase
   verified it: `grep -rn '"net' cmd/ internal/` stays empty for everything
@@ -453,6 +463,51 @@ phase ever read back in; every other Phase 1-6 limit is inherited
 unchanged. See [`policy-evaluation.md`](policy-evaluation.md) for the full
 design.
 
+## Release artifact supply-chain considerations (Phase 8)
+
+Phase 8 introduces no new document format and persists no new user data —
+`cmd/incidentdna/version.go` reads no file, and `dist/`'s SBOM/benchmark
+output describe this codebase's own dependency graph and performance, never
+a user's incident data. The one genuinely new consideration is release
+artifact supply-chain trust, stated explicitly here rather than implied
+away:
+
+- **Checksums are integrity-only, not authenticity.** A `SHA256SUMS`-
+  verified download proves the downloaded bytes match what the checksum
+  file names — it does not prove the checksum file itself, or the GitHub
+  Release page serving it, has not been tampered with. This is the same
+  class of residual trust every unsigned open-source CLI release already
+  carries, and the identical "integrity, not authenticity" property
+  `docs/evidence-storage.md` and `docs/incident-library.md` already state
+  for their own digest verification, restated here for release artifacts.
+  No GPG, no cosign, no Sigstore, no private key anywhere in this
+  repository or its CI — a compromised distribution channel (a compromised
+  GitHub account, a mirrored download site) could in principle serve a
+  tampered binary alongside a matching, also-tampered `SHA256SUMS` file.
+- **The release build process introduces no new attack surface** beyond
+  what `make build` already has: `scripts/build-release.sh` runs inside the
+  identical `Dockerfile.dev`/`golang:1.26.5` container every other `make`
+  target already uses, over the same source tree, with no new third-party
+  build tool and no network fetch beyond the already-existing
+  `go.sum`-pinned module download.
+- **The SBOM (`scripts/generate-sbom.sh`) makes no network request at
+  generation time** — it reads only the already-downloaded, already-
+  `go.sum`-verified local module cache via `go list -m -json all`.
+- **The vendor-neutral CI consumption example
+  (`examples/ci-consumption-example/`) does not weaken the "no network
+  access" invariant.** `check-release-gate.sh` invokes only an
+  already-built local `incidentdna` binary; it makes no HTTP request,
+  contacts no CI vendor API, and is explicitly documented as something a
+  *user's own* CI system runs, never something this repository's CI or the
+  `incidentdna` binary itself does.
+- **`incidentdna version` is a secondary, informational integrity signal
+  only** — a checksum-tampered binary that still ran would still report
+  its embedded build version, so a correct `version` output is not a
+  substitute for the `SHA256SUMS` check, only a convenience alongside it.
+
+See [`release-process.md`](release-process.md) for the full release-build
+design this section summarizes the risk posture of.
+
 ## Path traversal through CLI inputs
 
 `incidentdna validate/fingerprint/inspect` open exactly the file path(s)
@@ -549,7 +604,7 @@ exists and refuses to proceed (non-zero exit, no write) unless `--force` is
 passed — verified in `cmd/incidentdna/cli_test.go` and manually in
 `phase-1-report.md`. No other subcommand writes any file.
 
-## Future multi-tenant risks (explicitly out of scope through Phase 7)
+## Future multi-tenant risks (explicitly out of scope through Phase 8)
 
 Phase 3's incident library, Phase 4's regression-scenario runner, Phase 5's
 scenario-suite runner, Phase 6's library cross-reference, and Phase 7's
@@ -558,10 +613,14 @@ policy evaluator are **local and single-user, not shared or multi-tenant**
 a tenant, user account, or access-control layer of its own. Every
 invocation, including every `library`, `evidence`, `scenario`, `suite`, and
 `policy` subcommand, operates on files (and, for `library`/`evidence`, a
-store) the invoking user already has filesystem access to. Risks that
-become relevant only if a shared/remote/multi-tenant incident library,
-evidence store, or scenario/suite/policy-evaluation service is built in a
-later phase — none of this exists today, and Phase 7 explicitly does not
+store) the invoking user already has filesystem access to. Phase 8's
+release artifacts (`dist/`) carry the same property: a downloaded binary
+runs with the full permissions of, and against only the local files
+belonging to, whoever runs it — no multi-tenancy concept exists there
+either. Risks that become relevant only if a shared/remote/multi-tenant
+incident library, evidence store, or scenario/suite/policy-evaluation
+service is built in a later, currently-unplanned phase — none of this
+exists today, and Phase 8, the final currently-planned phase, does not
 build it (see [`product-scope.md`](product-scope.md)):
 
 - Cross-tenant fingerprint/identity leakage (can one tenant infer another

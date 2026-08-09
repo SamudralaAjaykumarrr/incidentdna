@@ -41,6 +41,7 @@ var commands = []command{
 	{"scenario", runScenario},
 	{"suite", runSuite},
 	{"policy", runPolicy},
+	{"version", runVersion},
 }
 
 func main() {
@@ -51,6 +52,13 @@ func run(args []string) int {
 	if len(args) == 0 {
 		printUsage()
 		return exitError
+	}
+
+	// --version/-v are handled before subcommand dispatch so they work
+	// standalone, unlike every other subcommand (which requires args[0] to
+	// name it exactly). Equivalent to `incidentdna version`.
+	if args[0] == "--version" || args[0] == "-v" {
+		return runVersion(context.Background(), nil)
 	}
 
 	for _, c := range commands {
@@ -128,6 +136,10 @@ Usage:
       evaluate an already-produced scenario/suite report against one and
       report a PASS/FAIL verdict. Run "incidentdna policy help" for
       subcommand details.
+  incidentdna version
+  incidentdna --version
+  incidentdna -v
+      Print the version this binary was built with, then exit 0.
 
 incidentdna performs no network access and collects no telemetry.
 `)

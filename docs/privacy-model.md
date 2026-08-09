@@ -253,7 +253,33 @@ exposed via `incidentdna policy verify`/`evaluate`:
   `cmd/incidentdna`, when `require_library_occurrence` is declared) is the
   same read-only `library.CheckFingerprint` Phase 6 already introduced.
 
-## What Phase 1 through Phase 7 do not do
+## Release engineering privacy implications (Phase 8)
+
+Phase 8 (see [`release-process.md`](release-process.md)) adds version
+reporting, a reproducible multi-platform release build, SHA-256 checksums,
+an SBOM, benchmarks, and a vendor-neutral CI-consumption example — a
+deliberate, written "no-op" entry for this document, not a silent gap:
+
+- **No new document format, no new persisted user data.**
+  `cmd/incidentdna/version.go` reads no file and persists nothing;
+  `dist/`'s SBOM (`incidentdna-<version>-sbom.json`) and benchmark output
+  (`incidentdna-<version>-bench.txt`) describe this codebase's own
+  dependency graph and this codebase's own performance — never a user's
+  incident, evidence, library, scenario, suite, or policy data.
+- **No change to redaction or sensitivity handling.** Nothing in Phase 8
+  reads, prints, or transmits an IDIR document, an evidence object, a
+  library occurrence, or any report content — `internal/idir`'s
+  `privacy.redacted`/`privacy.sensitive_fields` handling and every existing
+  redaction rule in `internal/validate` are untouched.
+  `examples/ci-consumption-example/` operates only on already-produced
+  scenario/suite reports and a policy document, the same content
+  `docs/policy-evaluation.md`'s own privacy paragraph already covers.
+- **No network access, no telemetry** — restating the unconditional
+  project invariant. `scripts/generate-sbom.sh` makes no network request:
+  it reads only the already-`go.sum`-pinned local module cache via `go
+  list -m -json all`.
+
+## What Phase 1 through Phase 8 do not do
 
 - No automatic redaction — nothing in this codebase removes or masks
   sensitive content; validation only checks that an author's manual

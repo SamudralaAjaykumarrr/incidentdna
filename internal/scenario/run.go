@@ -23,7 +23,6 @@ import (
 	"regexp"
 	"sort"
 	"strings"
-	"syscall"
 	"time"
 )
 
@@ -299,10 +298,11 @@ type execResult struct {
 // execCommand launches path/args as a child process with no shell
 // interpretation, a fixed cwd (workspaceRoot), a fixed minimal environment
 // plus declaredEnv, and bounded, stream-separated stdout/stderr capture. It
-// runs the child in its own process group (Setpgid) so a timeout expiry
-// kills the whole process tree the child spawned, not just the direct
-// child (docs/phase-4-plan.md §9's "process tree" guarantee, with the
-// documented residual gap for a fully detached grandchild).
+// runs the child in its own process group (via newProcessGroup, OS-specific
+// — see run_unix.go/run_windows.go) so a timeout expiry kills the whole
+// process tree the child spawned, not just the direct child
+// (docs/phase-4-plan.md §9's "process tree" guarantee, with the documented
+// residual gap for a fully detached grandchild).
 func execCommand(ctx context.Context, path string, args []string, declaredEnv map[string]string, workspaceRoot string, timeout time.Duration) execResult {
 	execCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
@@ -314,12 +314,13 @@ func execCommand(ctx context.Context, path string, args []string, declaredEnv ma
 	stderrBuf := newBoundedWriter(MaxScenarioOutputBytes)
 	cmd.Stdout = stdoutBuf
 	cmd.Stderr = stderrBuf
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	pg := newProcessGroup(cmd)
 
 	start := time.Now()
 	if err := cmd.Start(); err != nil {
 		return execResult{kind: execOutcomeInternalError, err: fmt.Errorf("start command: %w", err), duration: time.Since(start)}
 	}
+	pg.started(cmd)
 
 	done := make(chan error, 1)
 	go func() { done <- cmd.Wait() }()
@@ -330,12 +331,10 @@ func execCommand(ctx context.Context, path string, args []string, declaredEnv ma
 	case waitErr = <-done:
 	case <-execCtx.Done():
 		canceled = true
-		if cmd.Process != nil {
-			// Kill the whole process group (negative pid), not just the
-			// direct child, so children the command itself spawned are
-			// also terminated at the timeout boundary.
-			_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-		}
+		// Kill the whole process group/job, not just the direct child, so
+		// children the command itself spawned are also terminated at the
+		// timeout boundary.
+		pg.kill(cmd)
 		waitErr = <-done
 	}
 	duration := time.Since(start)

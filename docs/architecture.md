@@ -24,6 +24,13 @@ examples/regression-suite-demo/ Separate synthetic example for `incidentdna suit
 testdata/golden/        Golden fingerprint + one fixture per rejected validation case
 ```
 
+Phase 8 (release readiness, the final planned phase) adds no row to this
+table — no new `internal/` package, one new `cmd/incidentdna` file
+(`version.go`). Every package above is released as-is: see "Release
+artifacts and reproducible builds (Phase 8)" below for how `dist/`,
+`scripts/build-release.sh`, and `docs/release-process.md` turn this
+existing layout into versioned, checksummed, installable binaries.
+
 Dependency direction is strictly one-way:
 `idir` ← `validate`, `fingerprint`, `evidence`, `library`, `scenario`;
 `canonical` ← `fingerprint`, `library`; `fingerprint` ← `compare`, `library`,
@@ -329,6 +336,91 @@ store. See [`policy-evaluation.md`](policy-evaluation.md) for the full
 design: the IGP v0.1 document format, the two `incidentdna policy`
 subcommands, the exit-code contract, resource limits, and what this phase
 explicitly does not provide.
+
+## Release artifacts and reproducible builds (Phase 8)
+
+Phase 8 sits almost entirely outside the `idir → validate → canonical →
+fingerprint → compare` chain and the five leaf packages built on top of it
+(`evidence`, `library`, `suite`, `policy`) — it introduces exactly one new
+Go source concept at the `cmd/incidentdna` level
+(`cmd/incidentdna/version.go`) and otherwise adds no `internal/` package,
+with one narrow, explicitly reviewed exception: `internal/scenario`'s
+process-group timeout/kill mechanism (see "Windows portability fix" below).
+Everything else is build-time metadata, shell scripts, and documentation:
+
+```
+source tree (unchanged, except internal/scenario's OS split below)
+   |                                 VERSION (caller-supplied, e.g. v0.1.0)
+   |                                 |
+   |  scripts/build-release.sh: for each of {linux/amd64, linux/arm64,
+   |  darwin/amd64, darwin/arm64, windows/amd64} —
+   |    CGO_ENABLED=0 go build -trimpath -buildvcs=false
+   |      -ldflags "-s -w -X main.version=$VERSION" ...
+   |    built TWICE per platform, SHA-256-compared; mismatch aborts
+   v
+dist/incidentdna-$VERSION-<os>-<arch>.tar.gz|.zip
+  (binary + LICENSE at archive root, nothing else)
+   |
+   |  scripts/generate-checksums.sh: sha256sum over every archive,
+   |  sorted by filename
+   v
+dist/SHA256SUMS
+
+go.sum (already-pinned module cache)          go test -bench=. -benchmem
+   |                                              -run=^$ ./...
+   |  scripts/generate-sbom.sh:                     |
+   |  go list -m -json all -> reshape                |  scripts/run-benchmarks.sh
+   v                                                 v
+dist/incidentdna-$VERSION-sbom.json          dist/incidentdna-$VERSION-bench.txt
+  (incidentdna-sbom/v1)                        (raw `go test -bench` output,
+                                                 informational only, never gates)
+```
+
+- **Same toolchain, no new attack surface.** `scripts/build-release.sh`
+  runs inside the identical `Dockerfile.dev`/`golang:1.26.5` container
+  every other `make` target already uses — no second Docker image, no
+  host-Go dependency.
+- **`-buildvcs=false` is preserved unchanged**; `-trimpath` is its
+  multi-checkout companion (strips local filesystem paths so two checkouts
+  at different absolute paths produce byte-identical output); the version
+  string is a caller-supplied `$VERSION`, never derived from `git
+  describe`/`git rev-parse` — the same "no VCS-derived data in the binary"
+  invariant, generalized to the version string.
+- **Reproducibility is checked, not assumed**: each platform target is
+  built twice in immediate succession and the two binaries' SHA-256
+  digests are compared before anything is archived; a mismatch aborts the
+  whole release build.
+- **`cmd/incidentdna/version.go`** is the only new Go source file: a
+  package-level `var version = "dev"`, overridden only via `-ldflags -X
+  main.version=$VERSION` at build time. `make build` (the existing dev
+  target) is unchanged and continues to produce a binary whose
+  `incidentdna version` output is the literal string `dev`.
+- **Windows portability fix.** The original Phase 8 implementation shipped
+  four of the five required platforms: `internal/scenario/run.go` called
+  `syscall.SysProcAttr{Setpgid: true}` and `syscall.Kill(-pid, ...)`
+  directly, both Unix-only symbols, so `cmd/incidentdna` (which imports
+  `internal/scenario`) failed to compile under `GOOS=windows`. This was a
+  genuine defect against the approved plan's five-platform matrix, not an
+  accepted scope reduction, and has since been fixed: the process-group
+  logic was extracted out of `run.go` into two `//go:build`-tagged files —
+  `internal/scenario/run_unix.go` (`!windows`, the exact pre-existing
+  Setpgid/`Kill(-pid, SIGKILL)` behavior, byte-identical in effect) and
+  `internal/scenario/run_windows.go` (`windows`, a Job-Object-based
+  equivalent: `CreateJobObjectW`/`AssignProcessToJobObject`/
+  `TerminateJobObject` called directly against `kernel32.dll` via
+  `syscall.NewLazyDLL`, adding no module dependency beyond what `go.mod`
+  already declares). `run.go` itself now calls a small OS-agnostic
+  `processGroup` interface (`newProcessGroup`/`started`/`kill`) instead of
+  `syscall` directly, and no longer imports `syscall`. All five platforms
+  — `linux/amd64`, `linux/arm64`, `darwin/amd64`, `darwin/arm64`,
+  `windows/amd64` — now build, and `scripts/build-release.sh` produces all
+  five archives by default. See [`release-process.md`](release-process.md),
+  "Supported platform matrix," and `docs/phase-8-report.md` for the full
+  correction record.
+
+See [`release-process.md`](release-process.md) for the full design: the
+platform matrix, artifact naming, checksum/SBOM/benchmark generation, the
+vendor-neutral CI-consumption example, and the release checklist.
 
 ## CLI conventions
 
