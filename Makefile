@@ -1,8 +1,16 @@
-.PHONY: format lint test build example example-evidence example-library example-scenario example-suite example-library-crossref example-policy verify clean
+.PHONY: format lint test build example example-evidence example-library example-scenario example-suite example-library-crossref example-policy example-ci-consumption verify dist checksums sbom bench release-verify clean
 
 # Every target runs inside the dev container defined by Dockerfile.dev /
 # compose.yaml, so a contributor never needs Go installed on the host.
 RUN := docker compose run --rm --remove-orphans dev
+
+# Phase 8 release targets (dist, checksums, sbom, bench, release-verify)
+# read VERSION from the environment (default "dev" inside each script, per
+# scripts/build-release.sh). `docker compose run` does not forward host
+# environment variables into the container unless named explicitly via -e,
+# so these targets use RUN_VERSIONED instead of RUN to pass VERSION
+# through — e.g. `VERSION=v0.1.0 make release-verify`.
+RUN_VERSIONED := docker compose run --rm --remove-orphans -e VERSION dev
 
 format:
 	$(RUN) gofmt -w .
@@ -87,8 +95,56 @@ example-library-crossref: build
 example-policy: build
 	$(RUN) sh scripts/verify-policy-demo.sh
 
+# Phase 8: end-to-end check of examples/ci-consumption-example/
+# check-release-gate.sh against policies/release-gate-example.yaml and
+# examples/regression-suite-demo/, covering both the PASS (exit 0) and FAIL
+# (exit 2) release-gate outcomes. Not part of verify's chain (see
+# docs/phase-8-plan.md §14 vs. §21/§25: this Makefile follows §21/§25's
+# explicit "verify's existing dependency chain is unchanged" requirement,
+# the more specific and more repeated of the two) — available standalone,
+# and exercised as stage 6 of `make release-verify`
+# (scripts/verify-release-readiness.sh). See
+# scripts/verify-ci-consumption-example.sh and
+# examples/ci-consumption-example/README.md.
+example-ci-consumption: build
+	$(RUN) sh scripts/verify-ci-consumption-example.sh
+
 verify: lint test build example example-evidence example-library example-scenario example-suite example-library-crossref example-policy
 	$(RUN) sh scripts/verify-golden-fingerprint.sh
 
+# --- Phase 8: release engineering targets (docs/phase-8-plan.md §23) ---
+# Additive only, never inserted into verify's dependency chain above —
+# that chain, and its pass/fail semantics, are unchanged by Phase 8.
+
+# Reproducible multi-platform release build (scripts/build-release.sh) into
+# dist/. VERSION (env, default "dev") selects the injected version string.
+dist: build
+	$(RUN_VERSIONED) sh scripts/build-release.sh
+
+# SHA-256 checksums for every archive in dist/ (scripts/generate-checksums.sh).
+checksums: dist
+	$(RUN_VERSIONED) sh scripts/generate-checksums.sh
+
+# Minimal SBOM / dependency inventory (scripts/generate-sbom.sh). Independent
+# of dist/checksums — reads only go.sum via `go list -m -json all`.
+sbom:
+	$(RUN_VERSIONED) sh scripts/generate-sbom.sh
+
+# Informational Go benchmarks (scripts/run-benchmarks.sh). Never gates CI or
+# a release — see docs/phase-8-plan.md §13. Piped straight into
+# run-benchmarks.sh, which both writes dist/*-bench.txt and echoes the
+# output back to stdout itself — no `tee /dev/stderr` here, since that
+# device isn't reliably writable in every local/container/Windows
+# environment (see scripts/run-benchmarks.sh's header comment).
+bench:
+	$(RUN_VERSIONED) sh -c 'go test -bench=. -benchmem -run=^$$ ./... | sh scripts/run-benchmarks.sh'
+
+# Full release-readiness acceptance check (scripts/verify-release-readiness.sh,
+# docs/phase-8-plan.md §19). Meaningfully slower than `verify` (builds five
+# platform targets twice each) — run explicitly when preparing a release,
+# e.g. `VERSION=v0.1.0 make release-verify`, never on every ordinary push.
+release-verify: dist checksums sbom bench
+	$(RUN_VERSIONED) sh scripts/verify-release-readiness.sh
+
 clean:
-	rm -rf bin
+	rm -rf bin dist

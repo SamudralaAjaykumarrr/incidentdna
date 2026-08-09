@@ -332,9 +332,89 @@ not change `idir.Document`, the JSON Schema, `internal/validate`'s rules,
 document format and, for the report artifact it evaluates, Phase 4/5's
 already-existing, unchanged `Report` struct definitions.
 
-## Explicitly out of scope for Phase 1 through Phase 7
+## Phase 8 scope
 
-This codebase, through the end of Phase 7, contains none of:
+Phase 8 is the final planned phase. It builds **no new product capability**
+on top of Phases 1 through 7 — every `internal/` package they built
+(`idir`, `validate`, `canonical`, `fingerprint`, `compare`, `evidence`,
+`library`, `scenario`, `suite`, `policy`) is byte-for-byte unchanged except
+for four wholly new, additive `_bench_test.go` files. Instead, Phase 8
+closes the gap between "the product works" and "the product can be handed
+to someone outside this repository as a versioned, checksummed, installable
+binary with a documented five-minute path to first use" — release
+engineering and productization, not new functionality. Concretely:
+
+- A minimal CLI version contract: `incidentdna version` and
+  `incidentdna --version`/`-v`, backed by a build-time-injected version
+  string (`-ldflags -X main.version=$VERSION`), default `dev` for every
+  ordinary build. Never derived from git or the working tree — preserves
+  the existing `-buildvcs=false` determinism discipline, generalized to
+  the version string too.
+- A `LICENSE` file at the repository root: the standard, unmodified
+  Apache License 2.0 text — a settled maintainer decision, not an open one.
+- A reproducible, deterministic, multi-platform release build strategy
+  (`scripts/build-release.sh`), producing deterministically named archives
+  into `dist/`, each one built twice and SHA-256-compared before being
+  archived, aborting loudly on any mismatch.
+- SHA-256 checksum generation (`scripts/generate-checksums.sh`) and two
+  independent verification paths (`sha256sum -c`, and `incidentdna
+  version` as a secondary, informational integrity signal).
+- A minimal, dependency-free SBOM / dependency inventory
+  (`scripts/generate-sbom.sh`), generated from `go list -m -json all`
+  against the already-`go.sum`-pinned local module cache — no network
+  request, no new third-party SBOM tool.
+- Informational, non-gating Go benchmarks (`scripts/run-benchmarks.sh`) for
+  `internal/canonical`, `internal/fingerprint`, `internal/evidence`, and
+  `internal/validate` — never wired into `make verify` or any CI gate.
+- A vendor-neutral CI-consumption example
+  (`examples/ci-consumption-example/`), demonstrating an external CI job
+  running `incidentdna suite run` then `incidentdna policy evaluate` and
+  consuming the exit code — a new example directory and documentation
+  only, never a CI-vendor dependency inside `cmd/incidentdna`.
+- A written v0.1.0 compatibility contract (`docs/release-process.md`)
+  enumerating every Phase 1-7 public format, exit code, and CLI flag now
+  frozen for the `v0.1.x` series.
+- A single, new, flagship end-to-end acceptance script
+  (`scripts/verify-release-readiness.sh`) exercising all ten stages of the
+  workflow this document has described since Phase 1: incident →
+  fingerprint → evidence → library → scenario → suite → cross-reference →
+  policy → deterministic release decision → release-readiness proof —
+  composed entirely from already-existing, unmodified fixtures and
+  commands.
+- A five-minute quick-start installation flow, documented in `README.md`
+  and tested (not just asserted) against a real, freshly extracted release
+  archive.
+
+Full design in [`release-process.md`](release-process.md). Phase 8 does not
+change `idir.Document`, the JSON Schema, or any rule in
+`internal/validate`, `internal/canonical`, `internal/fingerprint`,
+`internal/compare`, `internal/evidence`, `internal/library`,
+`internal/suite`, or `internal/policy` — the release engineering it adds
+operates entirely outside the
+`idir → validate → canonical → fingerprint → compare` chain and four of the
+five leaf packages built on top of it. `internal/scenario` is the one
+exception: its process-group timeout/kill mechanism was split by
+`//go:build` tag into `run_unix.go` and `run_windows.go` (see below) so
+`cmd/incidentdna` compiles for all five platforms in the release matrix —
+every other line of `internal/scenario`'s behavior (execution semantics,
+resource bounds, outcome classification, report schema) is unchanged.
+
+**Windows platform gap, found and fixed.** The original Phase 8
+implementation shipped four of the five platforms named in the plan's
+matrix: `internal/scenario/run.go` used Unix-only
+`syscall.Setpgid`/`syscall.Kill` to enforce scenario timeouts across a
+whole process group, which does not compile under `GOOS=windows`. This has
+since been corrected: the process-group logic now lives behind a
+`//go:build` split (`internal/scenario/run_unix.go`, `run_windows.go`)
+implementing the same timeout/kill guarantee per OS — POSIX process groups
+on Unix (byte-identical to the pre-existing behavior), Job Objects on
+Windows. All five platforms now build and are shipped by
+`scripts/build-release.sh`. See `docs/release-process.md`, "Supported
+platform matrix," and `docs/phase-8-report.md` for the full record.
+
+## Explicitly out of scope for Phase 1 through Phase 8
+
+This codebase, through the end of Phase 8, contains none of:
 
 - React, FastAPI, or any web/API framework.
 - Kubernetes or any cloud infrastructure.
@@ -402,6 +482,19 @@ This codebase, through the end of Phase 7, contains none of:
 - Automatic scenario generation using AI — a scenario document is
   hand-authored; `incidentdna` only validates and runs one, never invents
   one.
+- **Cryptographic signing or key management of any kind.** Phase 8's
+  release-artifact SHA-256 checksums (`docs/release-process.md`) are
+  integrity-only, the same "proves bytes match a declared digest, not who
+  produced them or that they're trustworthy" property `evidence`/`library`
+  digests already had. No GPG, no cosign, no Sigstore, no private key
+  anywhere in this repository or its CI.
+- **Automated deployment of built artifacts.** Phase 8 produces release
+  archives and documents how to install one by hand; it adds no deploy
+  script, no package-manager publish step (no Homebrew formula, no
+  `apt`/`yum` package, no container image publish), and no capability that
+  pushes a built artifact anywhere on its own. Publishing a GitHub Release
+  from a tag is the one exception, and even that is a manual, human-
+  triggered action performed once at tag time, never an automated pipeline.
 
 These are all real future needs (see [`phase-1-report.md`](phase-1-report.md),
 "Recommended Phase 2 scope", [`phase-2-plan.md`](phase-2-plan.md) §16,

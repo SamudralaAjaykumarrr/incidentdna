@@ -3,7 +3,9 @@ name: CI
 on:
   push:
     branches: [main, "phase-*"]
+    tags: ["v*"]
   pull_request:
+  workflow_dispatch:
 
 jobs:
   verify:
@@ -46,3 +48,59 @@ jobs:
 
       - name: Golden fingerprint verification
         run: docker compose run --rm --remove-orphans dev sh scripts/verify-golden-fingerprint.sh
+
+      # --- Phase 8 additions below. Every step above this line is
+      # unconditionally unchanged from Phase 1-7 (docs/phase-8-plan.md §24)
+      # — new steps are appended after the existing chain, never inserted
+      # into or reordering it.
+
+      - name: CI consumption example validation
+        run: make example-ci-consumption
+
+      # Informational only — never gates this workflow (docs/phase-8-plan.md
+      # §13). continue-on-error means a benchmark regression or environment
+      # hiccup cannot fail this job.
+      - name: Benchmarks (informational only)
+        continue-on-error: true
+        run: make bench
+
+      - name: Upload benchmark output
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: incidentdna-bench
+          path: dist/*-bench.txt
+
+  # Release-readiness verification (docs/phase-8-plan.md §19, §24): builds
+  # the full platform matrix twice each and re-verifies checksums/SBOM/
+  # quick-start/CI-consumption end to end, so it is meaningfully slower
+  # than the `verify` job above. Deliberately scoped to a `v*` tag push or
+  # a manual workflow_dispatch — never on every ordinary push/PR.
+  release-verify:
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build dev image
+        run: docker compose build dev
+
+      - name: Determine release version
+        id: version
+        run: |
+          if [ "${GITHUB_REF#refs/tags/}" != "$GITHUB_REF" ]; then
+            echo "version=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=dev" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Release readiness verification
+        run: VERSION=${{ steps.version.outputs.version }} make release-verify
+
+      - name: Upload release artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: incidentdna-release-${{ steps.version.outputs.version }}
+          path: dist/

@@ -193,6 +193,29 @@ design — the exact CLI output, the exit-code contract, the JSON verdict
 report format, and what is explicitly *not* covered (no CI/CD integration,
 no fresh execution, no boolean combinators, no batch evaluation).
 
+## Phase 8: release readiness
+
+Phase 8, the final planned phase, builds no new product capability on top
+of Phases 1-7 — every `internal/` package they built is byte-for-byte
+unchanged (except four new benchmark test files, plus a small,
+byte-preserving-on-Unix OS split inside `internal/scenario` described
+below). Instead it makes the seven already-built layers installable,
+verifiable, and releasable as a versioned artifact: a
+`version`/`--version`/`-v` CLI contract, the Apache License 2.0 at the
+repository root, a reproducible five-platform release build with SHA-256
+checksums and a minimal SBOM, informational non-gating benchmarks, a
+vendor-neutral CI-consumption example (`examples/ci-consumption-example/`),
+a written v0.1.0 compatibility contract, and a flagship end-to-end
+acceptance script proving the whole stack — incident → fingerprint →
+evidence → library → scenario → suite → cross-reference → policy →
+deterministic release decision — composes correctly using only
+already-shipped commands and fixtures. See
+[`docs/release-process.md`](docs/release-process.md) for the full design,
+including the Windows portability fix that lets `windows/amd64` build
+alongside the other four platforms (`internal/scenario/run_unix.go` and
+`run_windows.go`, an OS-specific split of the process-group timeout/kill
+mechanism only — see that document's "Windows portability fix").
+
 ## CLI commands
 
 ```
@@ -302,6 +325,13 @@ incidentdna policy evaluate --policy <policy-file>
     --report. require_library_occurrence is evaluated only if --library is
     given; otherwise it is reported SKIP (never silently treated as
     satisfied).
+
+incidentdna version
+incidentdna --version
+incidentdna -v
+    Print the version this binary was built with ("dev" for an ordinary
+    `make build`; a real version string for a release build, see
+    "Installing a release" below), then exit 0. Never fails.
 ```
 
 Exit codes are meaningful and relied on by CI: `0` success, `1`
@@ -340,6 +370,45 @@ make clean    # rm -rf bin
 If Go is available directly (e.g. a local toolchain install), drop the
 `docker compose run --rm dev` prefix and run the same `go`/`gofmt` commands
 yourself — the Makefile is a thin wrapper, not a requirement.
+
+## Installing a release
+
+Building from source via Docker (above) remains the documented path for
+contributors. Someone who only wants to *run* `incidentdna` can instead
+download a checksummed, platform-appropriate release archive:
+
+```
+# 1. Download (pick your platform) and verify integrity
+curl -LO https://github.com/SamudralaAjaykumarrr/incidentdna/releases/download/v0.1.0/incidentdna-v0.1.0-linux-amd64.tar.gz
+curl -LO https://github.com/SamudralaAjaykumarrr/incidentdna/releases/download/v0.1.0/SHA256SUMS
+sha256sum -c SHA256SUMS --ignore-missing
+
+# 2. Extract and run
+tar xzf incidentdna-v0.1.0-linux-amd64.tar.gz
+./incidentdna version
+# incidentdna v0.1.0
+
+# 3. Try it against this repository's checked-in example (five-minute path)
+./incidentdna validate examples/duplicate-payment/incident.yaml
+./incidentdna fingerprint examples/duplicate-payment/incident.yaml
+./incidentdna scenario run examples/regression-scenario-demo/scenario-pass.yaml
+./incidentdna policy evaluate --policy policies/release-gate-example.yaml \
+    --scenario-report <report-from-previous-step>
+```
+
+Step 3 requires cloning (or downloading) this repository's `examples/` and
+`policies/` directories alongside the binary — deliberately not bundled
+inside the release archive (each archive contains exactly the binary and a
+copy of `LICENSE`), since these are demonstration fixtures, not part of the
+product. **This flow is not aspirational prose** — it is the literal
+sequence `scripts/verify-release-readiness.sh` executes against a freshly
+extracted archive as part of an automated acceptance check
+(`VERSION=v0.1.0 make release-verify`), so the documented quick start and
+the tested quick start are the same steps. See
+[`docs/release-process.md`](docs/release-process.md) for the full release
+build/checksum/SBOM/benchmark design, the supported platform matrix (five
+platforms — `linux/amd64`, `linux/arm64`, `darwin/amd64`, `darwin/arm64`,
+`windows/amd64`), and the v0.1.0 compatibility contract.
 
 ## Try it: the duplicate-payment example
 
@@ -500,11 +569,13 @@ are in [`docs/threat-model.md`](docs/threat-model.md) and
 cmd/incidentdna/    CLI entrypoint and subcommands
 internal/           idir, validate, canonical, fingerprint, compare, evidence, library, scenario, suite, policy packages
 schemas/idir/v0.1/  Documentation-grade JSON Schema for IDIR v0.1
-examples/           Synthetic example incident(s)
+examples/           Synthetic example incident(s), including ci-consumption-example/ (Phase 8)
 testdata/golden/    Golden fingerprint and validation-rejection fixtures
-scripts/            Golden-fingerprint and demo verification scripts
-docs/               Architecture, IDIR spec, fingerprint design, evidence storage, incident library, regression scenarios, scenario suites, library cross-reference, policy evaluation, threat model, privacy model, product scope
+scripts/            Golden-fingerprint, demo, and release verification scripts
+docs/               Architecture, IDIR spec, fingerprint design, evidence storage, incident library, regression scenarios, scenario suites, library cross-reference, policy evaluation, release process, threat model, privacy model, product scope
+dist/               Release build output (Phase 8; git-ignored, generated by `make dist`/`make release-verify` — not checked in)
 Dockerfile.dev, compose.yaml, Makefile   Containerized dev/build/test workflow
+LICENSE             Apache License 2.0 (Phase 8)
 ```
 
 ## Status and known limitations
@@ -522,7 +593,14 @@ changing any of them. Phase 6 adds a read-only, informational
 `--library` cross-reference on top of all five, changing only one function
 in `internal/library` and nothing else. Phase 7 adds a local, deterministic
 policy evaluator (`internal/policy`, a new sixth parallel leaf package) on
-top of all six, again without changing any of them. Within that combined
+top of all six, again without changing any of them. Phase 8, the final
+planned phase, adds no product capability on top of any of them — every
+`internal/` package above is byte-for-byte unchanged (except four new
+benchmark test files) — and instead makes the whole stack installable,
+verifiable, and releasable as a versioned artifact (`incidentdna version`,
+a reproducible multi-platform build, SHA-256 checksums, an SBOM,
+informational benchmarks, and a flagship end-to-end acceptance script). See
+[`docs/release-process.md`](docs/release-process.md). Within that combined
 scope, the following limitations are by design — see
 [`docs/threat-model.md`](docs/threat-model.md),
 [`docs/privacy-model.md`](docs/privacy-model.md),
@@ -606,6 +684,21 @@ scope, the following limitations are by design — see
   resource limits in `internal/policy/limits.go` are fixed, not
   configurable. See [`docs/policy-evaluation.md`](docs/policy-evaluation.md)
   for the full list.
+- **Release engineering is productization, not a new trust boundary.**
+  Release archives are integrity-checked (SHA-256), not signed — no GPG,
+  no cosign, no key management. All five platforms build, including
+  `windows/amd64`: `internal/scenario`'s process-group timeout/kill
+  mechanism is now split by `//go:build` tag into `run_unix.go` (the
+  pre-existing Setpgid/`Kill(-pid, ...)` behavior, unchanged) and
+  `run_windows.go` (a Job-Object-based equivalent) — see
+  `docs/release-process.md`, "Windows portability fix," for detail,
+  including the one honestly-stated residual gap: the Windows path is
+  verified by successful compilation and archive inspection, not by
+  execution on a real Windows host (no such host exists in this project's
+  CI). The SBOM covers only this module's own two-dependency Go graph, not
+  the base build-container OS. Benchmarks are a point-in-time snapshot with
+  no historical comparison and never gate CI or a release. See
+  [`docs/release-process.md`](docs/release-process.md) for the full list.
 
 This codebase contains no React/web framework, no Kubernetes or cloud
 infrastructure, no Kafka or event-ingestion integration, no OpenTelemetry or
@@ -613,6 +706,10 @@ observability-pipeline integration, no AI/LLM calls, no SaaS
 authentication/billing, and no real fault injection against a running
 system. It does not perform release blocking or telemetry ingestion, and it
 is not integrated with any other repository.
+
+## License
+
+IncidentDNA is licensed under the [Apache License 2.0](LICENSE).
 
 ## Roadmap
 
@@ -729,18 +826,68 @@ is not integrated with any other repository.
 - See [`docs/policy-evaluation.md`](docs/policy-evaluation.md) for the full
   design and its explicit limitations.
 
-**Future work (not started, not scoped, not implemented in this codebase):**
-ingestion from observability/event systems, integration into release
-gating (including wiring the Phase 6 cross-reference's "no occurrences
-found" result, or the Phase 7 policy evaluator's own exit code/verdict,
-into an actual CI/CD gate or merge check), sandboxed scenario execution,
-parallel suite execution, evidence/library signing or authenticity proof,
-remote/cloud storage for the evidence store, incident library, scenarios,
-or suites, additional policy rule types (boolean combinators, numeric
-thresholds, per-scenario rules), and any of the other items listed as
-explicitly out of scope in [`docs/product-scope.md`](docs/product-scope.md).
-None of this exists yet; treat any description of it as forward-looking,
-not current capability.
+**Implemented (Phase 8, this repository):**
+
+- A minimal CLI version contract: `incidentdna version` /
+  `--version` / `-v`, backed by a build-time-injected `-ldflags -X
+  main.version=$VERSION` string, default `dev` for every ordinary build
+- A root `LICENSE` file: the standard, unmodified Apache License 2.0 text
+- A reproducible, five-platform release build (`scripts/build-release.sh`)
+  — `linux/amd64`, `linux/arm64`, `darwin/amd64`, `darwin/arm64`, and
+  `windows/amd64`, each built twice and SHA-256-compared before archiving.
+  `windows/amd64` required extracting `internal/scenario`'s process-group
+  timeout/kill mechanism into a `//go:build`-tagged OS split
+  (`run_unix.go`/`run_windows.go`) — see
+  [`docs/release-process.md`](docs/release-process.md), "Windows
+  portability fix"
+- SHA-256 checksum generation and verification (`scripts/generate-checksums.sh`,
+  `dist/SHA256SUMS`)
+- A minimal, dependency-free SBOM (`scripts/generate-sbom.sh`,
+  `incidentdna-sbom/v1`), generated from `go list -m -json all` with no
+  network access
+- Informational, non-gating benchmarks for `internal/canonical`,
+  `internal/fingerprint`, `internal/evidence`, and `internal/validate`
+  (`scripts/run-benchmarks.sh`) — never wired into `make verify` or any CI
+  gate
+- A vendor-neutral CI-consumption example
+  (`examples/ci-consumption-example/`), demonstrating `suite run` +
+  `policy evaluate` exit-code consumption from an external CI system,
+  without any CI-vendor dependency inside `cmd/incidentdna`
+- A written v0.1.0 compatibility contract and a flagship end-to-end
+  acceptance script (`scripts/verify-release-readiness.sh`) proving the
+  full ten-stage workflow this README has described since Phase 1
+- New Makefile targets (`dist`, `checksums`, `sbom`, `bench`,
+  `release-verify`), all additive and outside `make verify`'s existing,
+  unchanged dependency chain
+- Every `internal/` package above is byte-for-byte unchanged by Phase 8
+  except four new, additive `_bench_test.go` files, plus
+  `internal/scenario`'s process-group timeout/kill mechanism, which was
+  relocated (unchanged in behavior on Unix) into `run_unix.go` and given a
+  new, equivalent Windows implementation in `run_windows.go` so
+  `cmd/incidentdna` compiles under `GOOS=windows`
+- See [`docs/release-process.md`](docs/release-process.md) for the full
+  design and its explicit limitations.
+
+**Future work: none currently planned.** Phase 8 is the final phase in
+this project's planned roadmap. Every item below was already named as a
+real future need across Phases 1-7's own planning documents, and remains
+exactly that — named, not built, and not currently scheduled: ingestion
+from observability/event systems, integration into release gating
+(including wiring the Phase 6 cross-reference's "no occurrences found"
+result, or the Phase 7 policy evaluator's own exit code/verdict, into an
+actual CI/CD gate or merge check), sandboxed scenario execution, parallel
+suite execution, evidence/library/release-artifact signing or authenticity
+proof (cryptographic or otherwise), remote/cloud storage for the evidence
+store, incident library, scenarios, or suites, additional policy rule
+types (boolean combinators, numeric thresholds, per-scenario rules),
+package-manager distribution, additional release platforms beyond the five
+already built, and any of the other items listed as explicitly out of
+scope in [`docs/product-scope.md`](docs/product-scope.md). None of this
+exists
+yet; treat any description of it as forward-looking, not current
+capability. A future maintainer choosing to pursue any of it starts a
+genuinely new, unscoped planning effort — the same discipline this project
+applied to every phase from Phase 1 onward.
 
 ## Contributing and development
 
